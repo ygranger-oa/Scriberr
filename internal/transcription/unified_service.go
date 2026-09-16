@@ -29,6 +29,7 @@ const (
 	ModelSortformer      = "sortformer"
 	ModelOpenAI          = "openai_whisper"
 	ModelVoxtral         = "voxtral"
+	ModelPyannoteCommunity1 = "pyannote/speaker-diarization-community-1"
 	ModelDiarization31   = "pyannote/speaker-diarization-3.1"
 	FamilyNvidiaCanary   = "nvidia_canary"
 	FamilyNvidiaParakeet = "nvidia_parakeet"
@@ -396,7 +397,7 @@ func (u *UnifiedTranscriptionService) selectModels(params models.WhisperXParams)
 		switch params.DiarizeModel {
 		case DiarizeSortformer:
 			diarizationModelID = ModelSortformer
-		case ModelPyannote, ModelDiarization31:
+		case ModelPyannote, ModelPyannoteCommunity1, ModelDiarization31:
 			diarizationModelID = ModelPyannote
 		default:
 			diarizationModelID = ModelPyannote // Default fallback
@@ -414,18 +415,8 @@ func (u *UnifiedTranscriptionService) selectModels(params models.WhisperXParams)
 
 // transcriptionIncludesDiarization checks if the transcription model already includes diarization
 func (u *UnifiedTranscriptionService) transcriptionIncludesDiarization(modelID string, params models.WhisperXParams) bool {
-	// WhisperX includes diarization when enabled
-	// WhisperX includes diarization when enabled
-	if modelID == ModelWhisperX {
-		if params.Diarize {
-			// Check if it's using nvidia_sortformer (which requires separate processing)
-			if params.DiarizeModel == DiarizeSortformer {
-				return false
-			}
-			return true
-		}
-	}
-
+	// Diarization is kept separate so all ASR backends use the same local
+	// attribution path and PyAnnote Community-1 exclusive diarization when available.
 	return false
 }
 
@@ -663,8 +654,8 @@ func (u *UnifiedTranscriptionService) convertToWhisperXParams(params models.Whis
 		"task": params.Task,
 
 		// Diarization
-		"diarize":       params.Diarize,
-		"diarize_model": params.DiarizeModel,
+		"diarize":       false,
+		"diarize_model": ModelPyannoteCommunity1,
 
 		// Quality settings
 		"temperature": params.Temperature,
@@ -682,12 +673,7 @@ func (u *UnifiedTranscriptionService) convertToWhisperXParams(params models.Whis
 	if params.Language != nil {
 		paramMap["language"] = *params.Language
 	}
-	if params.MinSpeakers != nil {
-		paramMap["min_speakers"] = *params.MinSpeakers
-	}
-	if params.MaxSpeakers != nil {
-		paramMap["max_speakers"] = *params.MaxSpeakers
-	}
+	u.addSpeakerCountParams(paramMap, params, true)
 	if params.HfToken != nil {
 		paramMap["hf_token"] = *params.HfToken
 	}
@@ -713,14 +699,10 @@ func (u *UnifiedTranscriptionService) convertToPyannoteParams(params models.Whis
 		"output_format":      OutputFormatJSON,
 		"auto_convert_audio": true,
 		"device":             "auto",
+		"model":              ModelPyannoteCommunity1,
 	}
 
-	if params.MinSpeakers != nil {
-		paramMap["min_speakers"] = *params.MinSpeakers
-	}
-	if params.MaxSpeakers != nil {
-		paramMap["max_speakers"] = *params.MaxSpeakers
-	}
+	u.addSpeakerCountParams(paramMap, params, true)
 	if params.HfToken != nil {
 		paramMap["hf_token"] = *params.HfToken
 	}
@@ -739,10 +721,35 @@ func (u *UnifiedTranscriptionService) convertToPyannoteParams(params models.Whis
 
 // convertToSortformerParams converts to Sortformer-specific parameters
 func (u *UnifiedTranscriptionService) convertToSortformerParams(params models.WhisperXParams) map[string]interface{} {
-	return map[string]interface{}{
+	paramMap := map[string]interface{}{
 		"output_format":      OutputFormatJSON,
 		"auto_convert_audio": true,
 		// Sortformer is optimized for 4 speakers, no additional config needed
+	}
+	u.addSpeakerCountParams(paramMap, params, false)
+	return paramMap
+}
+
+func (u *UnifiedTranscriptionService) addSpeakerCountParams(paramMap map[string]interface{}, params models.WhisperXParams, supportsExact bool) {
+	switch params.SpeakerCountMode {
+	case "exact":
+		if supportsExact && params.NumSpeakers != nil {
+			paramMap["num_speakers"] = *params.NumSpeakers
+		}
+	case "range":
+		if params.MinSpeakers != nil {
+			paramMap["min_speakers"] = *params.MinSpeakers
+		}
+		if params.MaxSpeakers != nil {
+			paramMap["max_speakers"] = *params.MaxSpeakers
+		}
+	default:
+		if params.MinSpeakers != nil {
+			paramMap["min_speakers"] = *params.MinSpeakers
+		}
+		if params.MaxSpeakers != nil {
+			paramMap["max_speakers"] = *params.MaxSpeakers
+		}
 	}
 }
 
@@ -833,30 +840,49 @@ func (u *UnifiedTranscriptionService) mergeDiarizationWithTranscription(transcri
 	mergedTranscript.Segments = make([]interfaces.TranscriptSegment, len(transcript.Segments))
 	copy(mergedTranscript.Segments, transcript.Segments)
 
-	// Assign speakers to transcript segments based on timing overlap
-	for i := range mergedTranscript.Segments {
-		segment := &mergedTranscript.Segments[i]
-		bestSpeaker := u.findBestSpeakerForSegment(segment.Start, segment.End, diarization.Segments)
-		if bestSpeaker != "" {
-			segment.Speaker = &bestSpeaker
-		}
+	speakerTimeline := diarization.Segments
+	if len(diarization.ExclusiveSegments) > 0 {
+		speakerTimeline = diarization.ExclusiveSegments
+		mergedTranscript.Metadata = ensureMetadata(mergedTranscript.Metadata)
+		mergedTranscript.Metadata["speaker_attribution_timeline"] = "exclusive_speaker_diarization"
 	}
 
-	// Also assign speakers to words if available
 	if len(transcript.WordSegments) > 0 {
 		mergedTranscript.WordSegments = make([]interfaces.TranscriptWord, len(transcript.WordSegments))
 		copy(mergedTranscript.WordSegments, transcript.WordSegments)
 
 		for i := range mergedTranscript.WordSegments {
 			word := &mergedTranscript.WordSegments[i]
-			bestSpeaker := u.findBestSpeakerForSegment(word.Start, word.End, diarization.Segments)
+			bestSpeaker := u.findBestSpeakerForWord(*word, speakerTimeline)
 			if bestSpeaker != "" {
 				word.Speaker = &bestSpeaker
 			}
 		}
+		mergedTranscript.Segments = u.rebuildSegmentsFromWords(mergedTranscript.Segments, mergedTranscript.WordSegments, speakerTimeline)
+		mergedTranscript.Segments = u.applySpeakerContinuity(mergedTranscript.Segments)
+		return &mergedTranscript
 	}
 
+	for i := range mergedTranscript.Segments {
+		segment := &mergedTranscript.Segments[i]
+		bestSpeaker := u.findBestSpeakerForSegment(segment.Start, segment.End, speakerTimeline)
+		if bestSpeaker != "" {
+			segment.Speaker = &bestSpeaker
+		}
+	}
+	mergedTranscript.Segments = u.applySpeakerContinuity(mergedTranscript.Segments)
+
 	return &mergedTranscript
+}
+
+func (u *UnifiedTranscriptionService) findBestSpeakerForWord(word interfaces.TranscriptWord, diarizationSegments []interfaces.DiarizationSegment) string {
+	start, end := word.Start, word.End
+	if end <= start {
+		center := start
+		start = center - 0.05
+		end = center + 0.05
+	}
+	return u.findBestSpeakerForSegment(start, end, diarizationSegments)
 }
 
 // findBestSpeakerForSegment finds the speaker with maximum overlap for a given time segment
@@ -877,6 +903,106 @@ func (u *UnifiedTranscriptionService) findBestSpeakerForSegment(start, end float
 	}
 
 	return bestSpeaker
+}
+
+func (u *UnifiedTranscriptionService) rebuildSegmentsFromWords(original []interfaces.TranscriptSegment, words []interfaces.TranscriptWord, diarizationSegments []interfaces.DiarizationSegment) []interfaces.TranscriptSegment {
+	if len(words) == 0 {
+		return original
+	}
+
+	var rebuilt []interfaces.TranscriptSegment
+	for _, segment := range original {
+		var current *interfaces.TranscriptSegment
+		for _, word := range words {
+			if word.End < segment.Start || word.Start > segment.End {
+				continue
+			}
+			speaker := speakerValue(word.Speaker)
+			if current == nil || speakerValue(current.Speaker) != speaker {
+				if current != nil {
+					rebuilt = append(rebuilt, *current)
+				}
+				current = &interfaces.TranscriptSegment{
+					Start:   word.Start,
+					End:     word.End,
+					Text:    strings.TrimSpace(word.Word),
+					Speaker: word.Speaker,
+				}
+				continue
+			}
+			current.End = word.End
+			if current.Text == "" {
+				current.Text = strings.TrimSpace(word.Word)
+			} else {
+				current.Text = strings.TrimSpace(current.Text + " " + strings.TrimSpace(word.Word))
+			}
+		}
+		if current != nil {
+			rebuilt = append(rebuilt, *current)
+			continue
+		}
+		fallback := segment
+		if fallback.Speaker == nil {
+			if speaker := u.findBestSpeakerForSegment(segment.Start, segment.End, diarizationSegments); speaker != "" {
+				fallback.Speaker = &speaker
+			}
+		}
+		rebuilt = append(rebuilt, fallback)
+	}
+	return rebuilt
+}
+
+func (u *UnifiedTranscriptionService) applySpeakerContinuity(segments []interfaces.TranscriptSegment) []interfaces.TranscriptSegment {
+	const maxMicroFragmentDuration = 0.35
+	const maxMicroFragmentWords = 1
+	const maxNeighborGap = 0.4
+
+	if len(segments) < 3 {
+		return segments
+	}
+
+	result := make([]interfaces.TranscriptSegment, len(segments))
+	copy(result, segments)
+	for i := 1; i < len(result)-1; i++ {
+		prev, cur, next := result[i-1], result[i], result[i+1]
+		if prev.Speaker == nil || cur.Speaker == nil || next.Speaker == nil {
+			continue
+		}
+		if *prev.Speaker != *next.Speaker || *cur.Speaker == *prev.Speaker {
+			continue
+		}
+		duration := cur.End - cur.Start
+		wordCount := len(strings.Fields(cur.Text))
+		closeToNeighbors := cur.Start-prev.End <= maxNeighborGap && next.Start-cur.End <= maxNeighborGap
+		if duration <= maxMicroFragmentDuration && wordCount <= maxMicroFragmentWords && closeToNeighbors && !isShortReply(cur.Text) {
+			speaker := *prev.Speaker
+			result[i].Speaker = &speaker
+		}
+	}
+	return result
+}
+
+func isShortReply(text string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(text), ".,!?;:")) {
+	case "yes", "yeah", "yep", "no", "nope", "ok", "okay", "oui", "non", "si":
+		return true
+	default:
+		return false
+	}
+}
+
+func speakerValue(speaker *string) string {
+	if speaker == nil {
+		return ""
+	}
+	return *speaker
+}
+
+func ensureMetadata(metadata map[string]string) map[string]string {
+	if metadata != nil {
+		return metadata
+	}
+	return map[string]string{}
 }
 
 // saveTranscriptionResults saves the transcription results to the database

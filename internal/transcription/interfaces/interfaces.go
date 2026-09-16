@@ -87,20 +87,43 @@ type TranscriptResult struct {
 
 // DiarizationSegment represents speaker diarization information
 type DiarizationSegment struct {
-	Start    float64 `json:"start"`
-	End      float64 `json:"end"`
-	Speaker  string  `json:"speaker"`
+	Start      float64 `json:"start"`
+	End        float64 `json:"end"`
+	Speaker    string  `json:"speaker"`
 	Confidence float64 `json:"confidence"`
+}
+
+// SpeakerProfile carries local speaker metadata without embedding vectors.
+type SpeakerProfile struct {
+	SpeakerID           string   `json:"speaker_id"`
+	DisplayName         *string  `json:"display_name,omitempty"`
+	EmbeddingID         *string  `json:"embedding_id,omitempty"`
+	Confidence          *float64 `json:"confidence,omitempty"`
+	MatchedKnownSpeaker *string  `json:"matched_known_speaker,omitempty"`
+	SimilarityScore     *float64 `json:"similarity_score,omitempty"`
 }
 
 // DiarizationResult represents the output of speaker diarization
 type DiarizationResult struct {
-	Segments       []DiarizationSegment `json:"segments"`
-	SpeakerCount   int                  `json:"speaker_count"`
-	Speakers       []string             `json:"speakers"`
-	ProcessingTime time.Duration        `json:"processing_time"`
-	ModelUsed      string               `json:"model_used"`
-	Metadata       map[string]string    `json:"metadata"`
+	Segments          []DiarizationSegment `json:"segments"`
+	ExclusiveSegments []DiarizationSegment `json:"exclusive_segments,omitempty"`
+	SpeakerCount      int                  `json:"speaker_count"`
+	Speakers          []string             `json:"speakers"`
+	SpeakerProfiles   []SpeakerProfile     `json:"speaker_profiles,omitempty"`
+	ProcessingTime    time.Duration        `json:"processing_time"`
+	ModelUsed         string               `json:"model_used"`
+	Metadata          map[string]string    `json:"metadata"`
+}
+
+// DiarizationCapabilities describes backend-level diarization features.
+type DiarizationCapabilities struct {
+	SupportsExactSpeakerCount    bool `json:"supports_exact_speaker_count"`
+	SupportsMinMaxSpeakerCount   bool `json:"supports_min_max_speaker_count"`
+	SupportsOverlap              bool `json:"supports_overlap"`
+	SupportsExclusiveDiarization bool `json:"supports_exclusive_diarization"`
+	SupportsEmbeddings           bool `json:"supports_embeddings"`
+	SupportsSpeakerIdentification bool `json:"supports_speaker_identification"`
+	SupportsConfidenceScores     bool `json:"supports_confidence_scores"`
 }
 
 // ProcessingContext contains context information for processing
@@ -153,6 +176,9 @@ type DiarizationAdapter interface {
 
 	// Diarize processes audio and returns speaker diarization
 	Diarize(ctx context.Context, input AudioInput, params map[string]interface{}, procCtx ProcessingContext) (*DiarizationResult, error)
+
+	// GetDiarizationCapabilities returns backend-specific diarization features.
+	GetDiarizationCapabilities() DiarizationCapabilities
 
 	// GetMaxSpeakers returns the maximum number of speakers this model can handle
 	GetMaxSpeakers() int

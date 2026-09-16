@@ -187,6 +187,18 @@ func (m *MockTranscriptionAdapter) Diarize(ctx context.Context, input interfaces
 	}, nil
 }
 
+func (m *MockTranscriptionAdapter) GetDiarizationCapabilities() interfaces.DiarizationCapabilities {
+	return interfaces.DiarizationCapabilities{
+		SupportsExactSpeakerCount:    true,
+		SupportsMinMaxSpeakerCount:   true,
+		SupportsOverlap:              false,
+		SupportsExclusiveDiarization: false,
+		SupportsEmbeddings:           false,
+		SupportsSpeakerIdentification: false,
+		SupportsConfidenceScores:     false,
+	}
+}
+
 func (m *MockTranscriptionAdapter) GetMaxSpeakers() int {
 	return 10
 }

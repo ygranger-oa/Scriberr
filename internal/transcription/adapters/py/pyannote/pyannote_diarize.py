@@ -29,6 +29,7 @@ def diarize_audio(
     output_file: str,
     hf_token: str,
     model: str = "pyannote/speaker-diarization-community-1",
+    num_speakers: int = None,
     min_speakers: int = None,
     max_speakers: int = None,
     output_format: str = "rttm",
@@ -98,6 +99,8 @@ def diarize_audio(
     try:
         # Run diarization
         diarization_params = {}
+        if num_speakers is not None:
+            diarization_params["num_speakers"] = num_speakers
         if min_speakers is not None:
             diarization_params["min_speakers"] = min_speakers
         if max_speakers is not None:
@@ -154,23 +157,47 @@ def diarize_audio(
 
 def save_json_format(diarization, output_file: str, audio_path: str):
     """Save diarization results in JSON format."""
+    segments = annotation_to_segments(getattr(diarization, "speaker_diarization", diarization))
+    exclusive_segments = annotation_to_segments(getattr(diarization, "exclusive_speaker_diarization", None))
+    if not exclusive_segments:
+        exclusive_segments = segments
+
+    speakers = {segment["speaker"] for segment in segments}
+    speakers.update(segment["speaker"] for segment in exclusive_segments)
+
+    # Sort segments by start time
+    segments.sort(key=lambda x: x["start"])
+    exclusive_segments.sort(key=lambda x: x["start"])
+
+    results = {
+        "audio_file": audio_path,
+        "model": "pyannote/speaker-diarization-community-1",
+        "segments": segments,
+        "exclusive_segments": exclusive_segments,
+        "speakers": sorted(speakers),
+        "speaker_count": len(speakers),
+        "total_duration": max(seg["end"] for seg in segments) if segments else 0,
+        "processing_info": {
+            "total_segments": len(segments),
+            "exclusive_segments": len(exclusive_segments),
+            "total_speech_time": sum(seg["duration"] for seg in segments)
+        }
+    }
+
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2)
+
+
+def annotation_to_segments(annotation):
+    """Convert a pyannote Annotation-like object into serializable segments."""
+    if annotation is None:
+        return []
+
     segments = []
     speakers = set()
 
-    # PyAnnote 4.x
-    if hasattr(diarization, "speaker_diarization"):
-        for turn, speaker in diarization.speaker_diarization:
-            segments.append({
-                "start": turn.start,
-                "end": turn.end,
-                "speaker": speaker,
-                "confidence": 1.0,
-                "duration": turn.duration
-            })
-            speakers.add(speaker)
-    # Older versions
-    elif hasattr(diarization, "itertracks"):
-        for segment, track, speaker in diarization.itertracks(yield_label=True):
+    if hasattr(annotation, "itertracks"):
+        for segment, track, speaker in annotation.itertracks(yield_label=True):
             segments.append({
                 "start": segment.start,
                 "end": segment.end,
@@ -179,25 +206,21 @@ def save_json_format(diarization, output_file: str, audio_path: str):
                 "duration": segment.duration
             })
             speakers.add(speaker)
+    else:
+        try:
+            for turn, speaker in annotation:
+                segments.append({
+                    "start": turn.start,
+                    "end": turn.end,
+                    "speaker": speaker,
+                    "confidence": 1.0,
+                    "duration": turn.duration
+                })
+                speakers.add(speaker)
+        except TypeError:
+            return []
 
-    # Sort segments by start time
-    segments.sort(key=lambda x: x["start"])
-
-    results = {
-        "audio_file": audio_path,
-        "model": "pyannote/speaker-diarization-community-1",
-        "segments": segments,
-        "speakers": sorted(speakers),
-        "speaker_count": len(speakers),
-        "total_duration": max(seg["end"] for seg in segments) if segments else 0,
-        "processing_info": {
-            "total_segments": len(segments),
-            "total_speech_time": sum(seg["duration"] for seg in segments)
-        }
-    }
-
-    with open(output_file, "w") as f:
-        json.dump(results, f, indent=2)
+    return segments
 
 
 def main():
@@ -222,6 +245,11 @@ def main():
         "--model",
         default="pyannote/speaker-diarization-community-1",
         help="PyAnnote model to use"
+    )
+    parser.add_argument(
+        "--num-speakers",
+        type=int,
+        help="Exact number of speakers"
     )
     parser.add_argument(
         "--min-speakers",
@@ -272,6 +300,14 @@ def main():
         print("Error: max_speakers must be at least 1")
         sys.exit(1)
 
+    if args.num_speakers is not None and args.num_speakers < 1:
+        print("Error: num_speakers must be at least 1")
+        sys.exit(1)
+
+    if args.num_speakers is not None and (args.min_speakers is not None or args.max_speakers is not None):
+        print("Error: num_speakers cannot be combined with min_speakers or max_speakers")
+        sys.exit(1)
+
     if (args.min_speakers is not None and args.max_speakers is not None and
         args.min_speakers > args.max_speakers):
         print("Error: min_speakers cannot be greater than max_speakers")
@@ -287,6 +323,7 @@ def main():
             output_file=args.output,
             hf_token=args.hf_token,
             model=args.model,
+            num_speakers=args.num_speakers,
             min_speakers=args.min_speakers,
             max_speakers=args.max_speakers,
             output_format=args.output_format,

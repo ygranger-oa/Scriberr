@@ -731,17 +731,24 @@ func (h *Handler) SubmitJob(c *gin.Context) {
 		diarize = getFormBoolWithDefault(c, "diarize", false)
 	}
 	params := models.WhisperXParams{
-		Model:       getFormValueWithDefault(c, "model", "base"),
-		BatchSize:   getFormIntWithDefault(c, "batch_size", 16),
-		ComputeType: getFormValueWithDefault(c, "compute_type", "int8"),
-		Device:      getFormValueWithDefault(c, "device", "cpu"),
-		VadOnset:    getFormFloatWithDefault(c, "vad_onset", 0.500),
-		VadOffset:   getFormFloatWithDefault(c, "vad_offset", 0.363),
-		Diarize:     diarize,
+		Model:            getFormValueWithDefault(c, "model", "base"),
+		BatchSize:        getFormIntWithDefault(c, "batch_size", 16),
+		ComputeType:      getFormValueWithDefault(c, "compute_type", "int8"),
+		Device:           getFormValueWithDefault(c, "device", "cpu"),
+		VadOnset:         getFormFloatWithDefault(c, "vad_onset", 0.500),
+		VadOffset:        getFormFloatWithDefault(c, "vad_offset", 0.363),
+		Diarize:          diarize,
+		SpeakerCountMode: getFormValueWithDefault(c, "speaker_count_mode", "automatic"),
 	}
 
 	if lang := c.PostForm("language"); lang != "" {
 		params.Language = &lang
+	}
+
+	if numSpeakers := c.PostForm("num_speakers"); numSpeakers != "" {
+		if num, err := strconv.Atoi(numSpeakers); err == nil {
+			params.NumSpeakers = &num
+		}
 	}
 
 	if minSpeakers := c.PostForm("min_speakers"); minSpeakers != "" {
@@ -768,6 +775,11 @@ func (h *Handler) SubmitJob(c *gin.Context) {
 		return
 	}
 	params.DiarizeModel = diarizeModel
+	if err := validateDiarizationParams(params); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		_ = h.fileService.RemoveFile(filePath)
+		return
+	}
 
 	// Create job
 	job := models.TranscriptionJob{
@@ -1074,7 +1086,8 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		VadOffset:                      0.363,
 		ChunkSize:                      30,
 		Diarize:                        false,
-		DiarizeModel:                   "pyannote/speaker-diarization-3.1",
+		SpeakerCountMode:               "automatic",
+		DiarizeModel:                   "pyannote",
 		SpeakerEmbeddings:              false,
 		Temperature:                    0,
 		BestOf:                         5,
@@ -1121,6 +1134,12 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Hugging Face token (hf_token) is required for Pyannote diarization"})
 			return nil, fmt.Errorf("hf_token required")
 		}
+	}
+
+	// Validate multi-track compatibility
+	if err := validateDiarizationParams(requestParams); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return nil, err
 	}
 
 	// Validate multi-track compatibility
@@ -2213,6 +2232,49 @@ func getFormBoolWithDefault(c *gin.Context, key string, defaultValue bool) bool 
 	return defaultValue
 }
 
+func validateDiarizationParams(params models.WhisperXParams) error {
+	if !params.Diarize {
+		return nil
+	}
+
+	switch params.DiarizeModel {
+	case "pyannote", "pyannote/speaker-diarization-community-1", "pyannote/speaker-diarization-3.1", "nvidia_sortformer":
+	default:
+		return fmt.Errorf("invalid diarize_model. Must be 'pyannote' or 'nvidia_sortformer'")
+	}
+
+	mode := params.SpeakerCountMode
+	if mode == "" {
+		mode = "automatic"
+	}
+
+	switch mode {
+	case "automatic":
+		return nil
+	case "exact":
+		if params.DiarizeModel == "nvidia_sortformer" {
+			return fmt.Errorf("exact speaker count is not supported by NVIDIA Sortformer")
+		}
+		if params.NumSpeakers == nil || *params.NumSpeakers < 1 {
+			return fmt.Errorf("num_speakers must be at least 1 when speaker_count_mode is exact")
+		}
+	case "range":
+		if params.DiarizeModel == "nvidia_sortformer" {
+			return fmt.Errorf("speaker count range is not supported by NVIDIA Sortformer")
+		}
+		if params.MinSpeakers == nil || *params.MinSpeakers < 1 {
+			return fmt.Errorf("min_speakers must be at least 1 when speaker_count_mode is range")
+		}
+		if params.MaxSpeakers == nil || *params.MaxSpeakers < *params.MinSpeakers {
+			return fmt.Errorf("max_speakers must be greater than or equal to min_speakers")
+		}
+	default:
+		return fmt.Errorf("speaker_count_mode must be automatic, exact, or range")
+	}
+
+	return nil
+}
+
 // Profile API Handlers
 
 // @Summary List transcription profiles
@@ -2493,7 +2555,8 @@ func (h *Handler) SubmitQuickTranscription(c *gin.Context) {
 
 			// Diarization settings
 			Diarize:           false,
-			DiarizeModel:      "pyannote/speaker-diarization-3.1",
+			SpeakerCountMode:  "automatic",
+			DiarizeModel:      "pyannote",
 			SpeakerEmbeddings: false,
 
 			// Transcription quality settings

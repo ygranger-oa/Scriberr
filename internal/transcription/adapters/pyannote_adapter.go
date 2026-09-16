@@ -42,9 +42,12 @@ func NewPyAnnoteAdapter(envPath string) *PyAnnoteAdapter {
 		Features: map[string]bool{
 			"speaker_detection":   true,
 			"speaker_constraints": true,
+			"exact_speaker_count":  true,
 			"confidence_scores":   true,
 			"rttm_output":         true,
 			"flexible_speakers":   true,
+			"exclusive_diarization": true,
+			"speaker_embeddings":    true,
 		},
 		Metadata: map[string]string{
 			"engine":    "pyannote_audio",
@@ -76,6 +79,16 @@ func NewPyAnnoteAdapter(envPath string) *PyAnnoteAdapter {
 		},
 
 		// Speaker constraints
+		{
+			Name:        "num_speakers",
+			Type:        "int",
+			Required:    false,
+			Default:     nil,
+			Min:         &[]float64{1}[0],
+			Max:         &[]float64{20}[0],
+			Description: "Exact number of speakers",
+			Group:       "basic",
+		},
 		{
 			Name:        "min_speakers",
 			Type:        "int",
@@ -166,6 +179,19 @@ func NewPyAnnoteAdapter(envPath string) *PyAnnoteAdapter {
 	}
 
 	return adapter
+}
+
+// GetDiarizationCapabilities returns PyAnnote Community-1 diarization features.
+func (p *PyAnnoteAdapter) GetDiarizationCapabilities() interfaces.DiarizationCapabilities {
+	return interfaces.DiarizationCapabilities{
+		SupportsExactSpeakerCount:    true,
+		SupportsMinMaxSpeakerCount:   true,
+		SupportsOverlap:              true,
+		SupportsExclusiveDiarization: true,
+		SupportsEmbeddings:           true,
+		SupportsSpeakerIdentification: false,
+		SupportsConfidenceScores:     true,
+	}
 }
 
 // GetMaxSpeakers returns the maximum number of speakers PyAnnote can handle
@@ -388,6 +414,9 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 	}
 
 	// Add speaker constraints
+	if numSpeakers := p.GetIntParameter(params, "num_speakers"); numSpeakers > 0 {
+		args = append(args, "--num-speakers", strconv.Itoa(numSpeakers))
+	}
 	if minSpeakers := p.GetIntParameter(params, "min_speakers"); minSpeakers > 0 {
 		args = append(args, "--min-speakers", strconv.Itoa(minSpeakers))
 	}
@@ -440,6 +469,13 @@ func (p *PyAnnoteAdapter) parseJSONResult(tempDir string) (*interfaces.Diarizati
 			Confidence float64 `json:"confidence"`
 			Duration   float64 `json:"duration"`
 		} `json:"segments"`
+		ExclusiveSegments []struct {
+			Start      float64 `json:"start"`
+			End        float64 `json:"end"`
+			Speaker    string  `json:"speaker"`
+			Confidence float64 `json:"confidence"`
+			Duration   float64 `json:"duration"`
+		} `json:"exclusive_segments"`
 		Speakers      []string `json:"speakers"`
 		SpeakerCount  int      `json:"speaker_count"`
 		TotalDuration float64  `json:"total_duration"`
@@ -451,13 +487,22 @@ func (p *PyAnnoteAdapter) parseJSONResult(tempDir string) (*interfaces.Diarizati
 
 	// Convert to standard format
 	result := &interfaces.DiarizationResult{
-		Segments:     make([]interfaces.DiarizationSegment, len(pyannoteResult.Segments)),
-		SpeakerCount: pyannoteResult.SpeakerCount,
-		Speakers:     pyannoteResult.Speakers,
+		Segments:          make([]interfaces.DiarizationSegment, len(pyannoteResult.Segments)),
+		ExclusiveSegments: make([]interfaces.DiarizationSegment, len(pyannoteResult.ExclusiveSegments)),
+		SpeakerCount:      pyannoteResult.SpeakerCount,
+		Speakers:          pyannoteResult.Speakers,
 	}
 
 	for i, seg := range pyannoteResult.Segments {
 		result.Segments[i] = interfaces.DiarizationSegment{
+			Start:      seg.Start,
+			End:        seg.End,
+			Speaker:    seg.Speaker,
+			Confidence: seg.Confidence,
+		}
+	}
+	for i, seg := range pyannoteResult.ExclusiveSegments {
+		result.ExclusiveSegments[i] = interfaces.DiarizationSegment{
 			Start:      seg.Start,
 			End:        seg.End,
 			Speaker:    seg.Speaker,

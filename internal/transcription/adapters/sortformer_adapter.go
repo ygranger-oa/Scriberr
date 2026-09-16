@@ -138,6 +138,19 @@ func NewSortformerAdapter(envPath string) *SortformerAdapter {
 	return adapter
 }
 
+// GetDiarizationCapabilities returns Sortformer diarization features.
+func (s *SortformerAdapter) GetDiarizationCapabilities() interfaces.DiarizationCapabilities {
+	return interfaces.DiarizationCapabilities{
+		SupportsExactSpeakerCount:    false,
+		SupportsMinMaxSpeakerCount:   false,
+		SupportsOverlap:              false,
+		SupportsExclusiveDiarization: false,
+		SupportsEmbeddings:           false,
+		SupportsSpeakerIdentification: false,
+		SupportsConfidenceScores:     false,
+	}
+}
+
 // GetMaxSpeakers returns the maximum number of speakers Sortformer can handle
 func (s *SortformerAdapter) GetMaxSpeakers() int {
 	return 8 // Can handle more but optimized for 4

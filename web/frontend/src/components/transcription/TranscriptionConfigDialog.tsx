@@ -44,6 +44,8 @@ export interface WhisperXParams {
     vad_offset: number;
     chunk_size: number;
     diarize: boolean;
+    speaker_count_mode: "automatic" | "exact" | "range";
+    num_speakers?: number;
     min_speakers?: number;
     max_speakers?: number;
     diarize_model: string;
@@ -108,6 +110,7 @@ const DEFAULT_PARAMS: WhisperXParams = {
     vad_offset: 0.363,
     chunk_size: 30,
     diarize: false,
+    speaker_count_mode: "automatic",
     diarize_model: "pyannote",
     speaker_embeddings: false,
     temperature: 0,
@@ -213,6 +216,7 @@ const PARAM_DESCRIPTIONS = {
     batch_size: "Segments processed at once. Higher = faster but more memory.",
     diarize: "Identify and separate different speakers.",
     diarize_model: "Pyannote (accurate, needs HF token) or NVIDIA Sortformer (up to 4 speakers).",
+    speaker_count_mode: "Automatic estimates speakers. Exact/range can improve meetings when the count is known.",
     temperature: "0 = deterministic, higher = more creative.",
     beam_size: "Search beams. Higher = better quality but slower.",
     vad_method: "Voice detection: Pyannote (accurate) or Silero (fast).",
@@ -268,6 +272,24 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
             const newParams = { ...prev, [key]: value };
             if (key === 'model_family' && value === 'whisper') {
                 newParams.diarize_model = 'pyannote';
+            }
+            if (key === 'diarize_model' && value === 'nvidia_sortformer') {
+                newParams.speaker_count_mode = 'automatic';
+                newParams.num_speakers = undefined;
+                newParams.min_speakers = undefined;
+                newParams.max_speakers = undefined;
+            }
+            if (key === 'speaker_count_mode') {
+                if (value === 'automatic') {
+                    newParams.num_speakers = undefined;
+                    newParams.min_speakers = undefined;
+                    newParams.max_speakers = undefined;
+                } else if (value === 'exact') {
+                    newParams.min_speakers = undefined;
+                    newParams.max_speakers = undefined;
+                } else if (value === 'range') {
+                    newParams.num_speakers = undefined;
+                }
             }
             return newParams;
         });
@@ -461,24 +483,51 @@ function DiarizationSection({ id, params, updateParam, description }: {
                             ]}
                         />
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <FormField label="Min Speakers" optional>
+                        <SelectField
+                            label="Speaker Count"
+                            description={PARAM_DESCRIPTIONS.speaker_count_mode}
+                            value={params.speaker_count_mode || "automatic"}
+                            onValueChange={(v) => updateParam('speaker_count_mode', v as WhisperXParams["speaker_count_mode"])}
+                            options={params.diarize_model === "nvidia_sortformer"
+                                ? [{ value: "automatic", label: "Automatic" }]
+                                : [
+                                    { value: "automatic", label: "Automatic" },
+                                    { value: "exact", label: "Exact" },
+                                    { value: "range", label: "Range" },
+                                ]}
+                        />
+
+                        {params.speaker_count_mode === "exact" && params.diarize_model !== "nvidia_sortformer" && (
+                            <FormField label="Speakers">
                                 <Input
-                                    type="number" min={1} max={20} placeholder="Auto"
-                                    value={params.min_speakers || ""}
-                                    onChange={(e) => updateParam('min_speakers', e.target.value ? parseInt(e.target.value) : undefined)}
+                                    type="number" min={1} max={20}
+                                    value={params.num_speakers || ""}
+                                    onChange={(e) => updateParam('num_speakers', e.target.value ? parseInt(e.target.value) : undefined)}
                                     className={inputClassName}
                                 />
                             </FormField>
-                            <FormField label="Max Speakers" optional>
-                                <Input
-                                    type="number" min={1} max={20} placeholder="Auto"
-                                    value={params.max_speakers || ""}
-                                    onChange={(e) => updateParam('max_speakers', e.target.value ? parseInt(e.target.value) : undefined)}
-                                    className={inputClassName}
-                                />
-                            </FormField>
-                        </div>
+                        )}
+
+                        {params.speaker_count_mode === "range" && params.diarize_model !== "nvidia_sortformer" && (
+                            <div className="grid grid-cols-2 gap-4">
+                                <FormField label="Min Speakers">
+                                    <Input
+                                        type="number" min={1} max={20}
+                                        value={params.min_speakers || ""}
+                                        onChange={(e) => updateParam('min_speakers', e.target.value ? parseInt(e.target.value) : undefined)}
+                                        className={inputClassName}
+                                    />
+                                </FormField>
+                                <FormField label="Max Speakers">
+                                    <Input
+                                        type="number" min={1} max={20}
+                                        value={params.max_speakers || ""}
+                                        onChange={(e) => updateParam('max_speakers', e.target.value ? parseInt(e.target.value) : undefined)}
+                                        className={inputClassName}
+                                    />
+                                </FormField>
+                            </div>
+                        )}
 
                         {params.diarize_model === "pyannote" && (
                             <>
