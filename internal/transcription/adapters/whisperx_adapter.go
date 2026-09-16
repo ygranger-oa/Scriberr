@@ -152,8 +152,8 @@ func NewWhisperXAdapter(envPath string) *WhisperXAdapter {
 			Name:        "diarize_model",
 			Type:        "string",
 			Required:    false,
-			Default:     "pyannote/speaker-diarization-3.1",
-			Options:     []string{"pyannote/speaker-diarization-3.1", "pyannote"},
+			Default:     "pyannote/speaker-diarization-community-1",
+			Options:     []string{"pyannote/speaker-diarization-community-1", "pyannote"},
 			Description: "Diarization model to use",
 			Group:       "advanced",
 		},
@@ -538,8 +538,9 @@ func (w *WhisperXAdapter) buildWhisperXArgs(input interfaces.AudioInput, params 
 		args = append(args, "--diarize")
 
 		diarizeModel := w.GetStringParameter(params, "diarize_model")
-		if diarizeModel == "pyannote" {
-			diarizeModel = "pyannote/speaker-diarization-3.1"
+		switch diarizeModel {
+		case "", "pyannote", "pyannote/speaker-diarization-3.1":
+			diarizeModel = "pyannote/speaker-diarization-community-1"
 		}
 		args = append(args, "--diarize_model", diarizeModel)
 
