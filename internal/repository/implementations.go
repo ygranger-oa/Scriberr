@@ -543,6 +543,7 @@ func (r *noteRepository) DeleteByTranscriptionID(ctx context.Context, transcript
 type SpeakerMappingRepository interface {
 	Repository[models.SpeakerMapping]
 	ListByJob(ctx context.Context, jobID string) ([]models.SpeakerMapping, error)
+	ListCustomNames(ctx context.Context) ([]string, error)
 	UpdateMappings(ctx context.Context, jobID string, mappings []models.SpeakerMapping) error
 	DeleteByJobID(ctx context.Context, jobID string) error
 }
@@ -564,6 +565,20 @@ func (r *speakerMappingRepository) ListByJob(ctx context.Context, jobID string) 
 		return nil, err
 	}
 	return mappings, nil
+}
+
+func (r *speakerMappingRepository) ListCustomNames(ctx context.Context) ([]string, error) {
+	var names []string
+	err := r.db.WithContext(ctx).
+		Model(&models.SpeakerMapping{}).
+		Distinct("custom_name").
+		Where("custom_name <> ''").
+		Order("custom_name ASC").
+		Pluck("custom_name", &names).Error
+	if err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func (r *speakerMappingRepository) DeleteByJobID(ctx context.Context, jobID string) error {

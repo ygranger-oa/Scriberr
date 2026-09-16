@@ -21,6 +21,7 @@ interface SpeakerRenameDialogProps {
   transcriptionId: string;
   onSpeakerMappingsUpdate: (mappings: SpeakerMapping[]) => void;
   initialSpeakers?: string[]; // Detected speakers from transcript
+  initialSpeaker?: string | null;
 }
 
 const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
@@ -29,9 +30,11 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
   transcriptionId,
   onSpeakerMappingsUpdate,
   initialSpeakers = [],
+  initialSpeaker = null,
 }) => {
   const { getAuthHeaders } = useAuth();
   const [speakerMappings, setSpeakerMappings] = useState<Record<string, string>>({});
+  const [speakerNameSuggestions, setSpeakerNameSuggestions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,15 +44,24 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
     setError(null);
 
     try {
-      const response = await fetch(`/api/v1/transcription/${transcriptionId}/speakers`, {
-        headers: { ...getAuthHeaders() },
-      });
+      const [mappingsResponse, suggestionsResponse] = await Promise.all([
+        fetch(`/api/v1/transcription/${transcriptionId}/speakers`, {
+          headers: { ...getAuthHeaders() },
+        }),
+        fetch('/api/v1/transcription/speaker-names', {
+          headers: { ...getAuthHeaders() },
+        }),
+      ]);
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch speaker mappings: ${response.statusText}`);
+      if (!mappingsResponse.ok) {
+        throw new Error(`Failed to fetch speaker mappings: ${mappingsResponse.statusText}`);
       }
 
-      const existingMappings: SpeakerMapping[] = await response.json();
+      const existingMappings: SpeakerMapping[] = await mappingsResponse.json();
+      if (suggestionsResponse.ok) {
+        const names: string[] = await suggestionsResponse.json();
+        setSpeakerNameSuggestions([...new Set(names.filter(Boolean))].sort((a, b) => a.localeCompare(b)));
+      }
 
       // Create a mapping object from the response
       const mappingObj: Record<string, string> = {};
@@ -60,7 +72,9 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
       });
 
       // Add any speakers from the transcript that don't have mappings yet
-      initialSpeakers.forEach(speaker => {
+      const allSpeakers = new Set(initialSpeakers);
+      if (initialSpeaker) allSpeakers.add(initialSpeaker);
+      allSpeakers.forEach(speaker => {
         if (!mappingObj[speaker]) {
           mappingObj[speaker] = speaker; // Default to original name
         }
@@ -73,14 +87,16 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
 
       // Initialize with default mappings if fetch fails
       const defaultMappings: Record<string, string> = {};
-      initialSpeakers.forEach(speaker => {
+      const allSpeakers = new Set(initialSpeakers);
+      if (initialSpeaker) allSpeakers.add(initialSpeaker);
+      allSpeakers.forEach(speaker => {
         defaultMappings[speaker] = speaker;
       });
       setSpeakerMappings(defaultMappings);
     } finally {
       setIsLoading(false);
     }
-  }, [transcriptionId, getAuthHeaders, initialSpeakers]);
+  }, [transcriptionId, getAuthHeaders, initialSpeakers, initialSpeaker]);
 
   // Initialize speaker mappings when dialog opens
   useEffect(() => {
@@ -131,6 +147,7 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
   };
 
   const speakers = Object.keys(speakerMappings).sort();
+  const visibleSpeakers = initialSpeaker && speakers.includes(initialSpeaker) ? [initialSpeaker] : speakers;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -155,7 +172,7 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
               </div>
             )}
 
-            {speakers.length === 0 ? (
+            {visibleSpeakers.length === 0 ? (
               <Card>
                 <CardContent className="pt-6 text-center text-muted-foreground">
                   <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -164,10 +181,10 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
               </Card>
             ) : (
               <div className="space-y-3 max-h-60 overflow-y-auto">
-                {speakers.map((speaker) => (
+                {visibleSpeakers.map((speaker) => (
                   <div
                     key={speaker}
-                    className="space-y-1"
+                    className="space-y-2"
                   >
                     <Label htmlFor={`speaker-${speaker}`} className="text-xs font-medium text-muted-foreground">
                       {speaker}
@@ -177,8 +194,28 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
                       value={speakerMappings[speaker] || ''}
                       onChange={(e) => handleSpeakerNameChange(speaker, e.target.value)}
                       placeholder={`Enter custom name for ${speaker}`}
+                      list={`speaker-suggestions-${speaker}`}
                       className="transition-all duration-200 focus:ring-2 focus:ring-primary/20"
                     />
+                    <datalist id={`speaker-suggestions-${speaker}`}>
+                      {speakerNameSuggestions.map((name) => (
+                        <option key={name} value={name} />
+                      ))}
+                    </datalist>
+                    {speakerNameSuggestions.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {speakerNameSuggestions.slice(0, 8).map((name) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => handleSpeakerNameChange(speaker, name)}
+                            className="rounded-md border border-carbon-200 dark:border-carbon-700 px-2 py-1 text-xs text-carbon-600 dark:text-carbon-300 hover:bg-carbon-100 dark:hover:bg-carbon-800 transition-colors"
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -193,7 +230,7 @@ const SpeakerRenameDialog: React.FC<SpeakerRenameDialogProps> = ({
           </Button>
           <Button
             onClick={saveSpeakerMappings}
-            disabled={isSaving || speakers.length === 0}
+            disabled={isSaving || visibleSpeakers.length === 0}
             className="min-w-[100px]"
           >
             {isSaving ? (

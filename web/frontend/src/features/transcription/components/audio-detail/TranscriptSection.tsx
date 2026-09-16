@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from "react";
+import { useRef, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { TranscriptView } from "@/components/transcript/TranscriptView";
@@ -58,6 +58,7 @@ export function TranscriptSection({
     const isMobile = useIsMobile();
     const isDesktop = useIsDesktop();
     const queryClient = useQueryClient();
+    const [selectedSpeaker, setSelectedSpeaker] = useState<string | null>(null);
 
     // Data hooks
     const { data: notes = [] } = useNotes(audioId);
@@ -158,6 +159,11 @@ export function TranscriptSection({
         }
     };
 
+    const handleSpeakerClick = (speaker: string) => {
+        setSelectedSpeaker(speaker);
+        setSpeakerRenameOpen(true);
+    };
+
     if (!transcript) return null;
 
     return (
@@ -195,6 +201,7 @@ export function TranscriptSection({
                             highlightedWordRef={highlightedWordRef}
                             speakerMappings={speakerMappings}
                             autoScrollEnabled={autoScrollEnabled}
+                            onSpeakerClick={transcriptMode === 'expanded' ? handleSpeakerClick : undefined}
                         />
                     </div>
                 </div>
@@ -211,9 +218,13 @@ export function TranscriptSection({
             {/* Speaker Rename Dialog */}
             <SpeakerRenameDialog
                 open={speakerRenameOpen}
-                onOpenChange={setSpeakerRenameOpen}
+                onOpenChange={(open) => {
+                    setSpeakerRenameOpen(open);
+                    if (!open) setSelectedSpeaker(null);
+                }}
                 transcriptionId={audioId}
                 initialSpeakers={getDetectedSpeakers()}
+                initialSpeaker={selectedSpeaker}
                 onSpeakerMappingsUpdate={() => {
                     queryClient.invalidateQueries({ queryKey: ["speakerMappings", audioId] });
                 }}

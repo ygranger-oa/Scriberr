@@ -49,6 +49,7 @@ interface TranscriptViewProps {
     speakerMappings: Record<string, string>;
     autoScrollEnabled: boolean;
     onSeek: (time: number) => void;
+    onSpeakerClick?: (speaker: string) => void;
     className?: string;
 }
 
@@ -63,6 +64,7 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
     speakerMappings,
     autoScrollEnabled,
     onSeek,
+    onSpeakerClick,
     className
 }, ref) => {
 
@@ -305,12 +307,21 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
                                 {new Date(segment.start * 1000).toISOString().substr(11, 8)}
                             </span>
                             {segment.speaker && (
-                                <span
-                                    className="font-medium text-carbon-700 dark:text-carbon-300 truncate max-w-full"
+                                <button
+                                    type="button"
+                                    className={cn(
+                                        "font-medium text-carbon-700 dark:text-carbon-300 truncate max-w-full rounded px-1 text-left transition-colors",
+                                        onSpeakerClick && "cursor-pointer hover:bg-carbon-100 hover:text-carbon-900 dark:hover:bg-carbon-800 dark:hover:text-carbon-100"
+                                    )}
                                     title={getDisplaySpeakerName(segment.speaker)}
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onSpeakerClick?.(segment.speaker!);
+                                    }}
                                 >
                                     {getDisplaySpeakerName(segment.speaker)}
-                                </span>
+                                </button>
                             )}
                         </div>
 

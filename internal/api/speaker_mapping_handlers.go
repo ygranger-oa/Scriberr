@@ -27,6 +27,26 @@ type SpeakerMappingResponse struct {
 	CustomName      string `json:"custom_name"`
 }
 
+// ListSpeakerNames retrieves all custom speaker names used across transcriptions
+// @Summary List historical speaker names
+// @Description Retrieves distinct custom speaker names already assigned to speakers
+// @Tags transcription
+// @Produce json
+// @Success 200 {array} string
+// @Failure 500 {object} map[string]string
+// @Security BearerAuth
+// @Security ApiKeyAuth
+// @Router /api/v1/transcription/speaker-names [get]
+func (h *Handler) ListSpeakerNames(c *gin.Context) {
+	names, err := h.speakerMappingRepo.ListCustomNames(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list speaker names"})
+		return
+	}
+
+	c.JSON(http.StatusOK, names)
+}
+
 // GetSpeakerMappings retrieves all speaker mappings for a transcription
 // @Summary Get speaker mappings for a transcription
 // @Description Retrieves all custom speaker names for a transcription job

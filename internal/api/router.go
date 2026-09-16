@@ -150,6 +150,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 			transcription.POST("/:id/notes", handler.CreateNote)
 
 			// Speaker mappings for a transcription
+			transcription.GET("/speaker-names", handler.ListSpeakerNames)
 			transcription.GET("/:id/speakers", handler.GetSpeakerMappings)
 			transcription.POST("/:id/speakers", handler.UpdateSpeakerMappings)
 
