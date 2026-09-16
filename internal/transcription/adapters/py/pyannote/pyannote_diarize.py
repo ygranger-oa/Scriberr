@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from pyannote.audio import Pipeline
 import torch
+import torchaudio
 
 # Fix for PyTorch 2.6+ which defaults weights_only=True
 # We need to allowlist PyAnnote's custom classes
@@ -22,6 +23,22 @@ except ImportError:
     pass
 except Exception as e:
     print(f"Warning: Could not add safe globals: {e}")
+
+
+def load_audio_for_pipeline(audio_path: str):
+    """
+    Load audio before calling PyAnnote so pyannote.audio 4.x does not rely on
+    torchcodec's internal AudioDecoder. The input is already converted to WAV
+    by Scriberr, and torchaudio handles that reliably in this environment.
+    """
+    waveform, sample_rate = torchaudio.load(audio_path)
+    if waveform.ndim == 2 and waveform.shape[0] > 1:
+        waveform = waveform.mean(dim=0, keepdim=True)
+    return {
+        "waveform": waveform,
+        "sample_rate": sample_rate,
+        "uri": Path(audio_path).stem,
+    }
 
 
 def diarize_audio(
@@ -97,6 +114,8 @@ def diarize_audio(
     print(f"Processing audio file: {audio_path}")
 
     try:
+        audio_input = load_audio_for_pipeline(audio_path)
+
         # Run diarization
         diarization_params = {}
         if num_speakers is not None:
@@ -108,10 +127,10 @@ def diarize_audio(
 
         if diarization_params:
             print(f"Using speaker constraints: {diarization_params}")
-            diarization = pipeline(audio_path, **diarization_params)
+            diarization = pipeline(audio_input, **diarization_params)
         else:
             print("Using automatic speaker detection")
-            diarization = pipeline(audio_path)
+            diarization = pipeline(audio_input)
 
         print(f"Diarization completed. Saving results to: {output_file}")
 
