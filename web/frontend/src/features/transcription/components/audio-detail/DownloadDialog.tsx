@@ -37,7 +37,7 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
         // Helper to get filename base
         const getFileNameWithoutExt = () => {
             const name = audioFile.title || audioFile.audio_path.split("/").pop() || "transcript";
-            return name.replace(/\.[^/.]+$/, '');
+            return name.replace(/\.[^/.]+$/, '').replace(/-/g, '_');
         };
         const filenameBase = getFileNameWithoutExt();
 
