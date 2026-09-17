@@ -225,7 +225,7 @@ const PARAM_DESCRIPTIONS = {
     speaker_count_mode: "Automatic estimates speakers. Exact/range can improve meetings when the count is known.",
     temperature: "0 = deterministic, higher = more creative.",
     beam_size: "Search beams. Higher = better quality but slower.",
-    vad_method: "Voice detection: Pyannote (accurate) or Silero (fast).",
+    vad_method: "Pyannote keeps its native segmentation. Silero removes detected silence before diarization.",
     initial_prompt: "Context text to guide transcription style.",
     hf_token: "Required for Pyannote diarization models.",
     vad_onset: "Voice detection sensitivity. Lower values (0.3-0.4) catch quieter/distant speakers.",
@@ -558,6 +558,17 @@ function DiarizationSection({ id, params, updateParam, description }: {
                                         className={inputClassName}
                                     />
                                 </FormField>
+
+                                <SelectField
+                                    label="Pre-diarization VAD"
+                                    description={PARAM_DESCRIPTIONS.vad_method}
+                                    value={params.vad_method}
+                                    onValueChange={(v) => updateParam('vad_method', v)}
+                                    options={[
+                                        { value: "pyannote", label: "Pyannote (native)" },
+                                        { value: "silero", label: "Silero (remove silence)" },
+                                    ]}
+                                />
 
                                 <div className="pt-3 border-t border-[var(--border-subtle)]">
                                     <p className="text-xs text-[var(--text-tertiary)] mb-3">Voice Detection Tuning (for noisy/distant audio)</p>
