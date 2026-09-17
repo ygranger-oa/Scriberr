@@ -162,6 +162,15 @@ func NewPyAnnoteAdapter(envPath string) *PyAnnoteAdapter {
 			Group:       "advanced",
 		},
 		{
+			Name:        "pre_diarization_vad",
+			Type:        "string",
+			Required:    false,
+			Default:     "pyannote",
+			Options:     []string{"pyannote", "silero", "none"},
+			Description: "Local VAD stage before diarization. Silero can reduce the audio duration processed by PyAnnote.",
+			Group:       "advanced",
+		},
+		{
 			Name:        "auto_convert_audio",
 			Type:        "bool",
 			Required:    false,
@@ -214,7 +223,7 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 	}
 
 	// Check if PyAnnote is already available (using cache to speed up repeated checks)
-	if CheckEnvironmentReady(p.envPath, "from pyannote.audio import Pipeline") {
+	if CheckEnvironmentReady(p.envPath, "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad") {
 		logger.Info("PyAnnote already available in environment")
 		// Still ensure script exists
 		if err := p.copyDiarizationScript(); err != nil {
@@ -230,7 +239,7 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 	}
 
 	// Verify PyAnnote is now available
-	testCmd := exec.Command("uv", "run", "--native-tls", "--project", p.envPath, "python", "-c", "from pyannote.audio import Pipeline")
+	testCmd := exec.Command("uv", "run", "--native-tls", "--project", p.envPath, "python", "-c", "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad")
 	if testCmd.Run() != nil {
 		logger.Warn("PyAnnote environment test still failed after setup")
 	}
@@ -354,7 +363,7 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing PyAnnote command", "args", strings.Join(args, " "))
+	logger.Info("Executing PyAnnote command", "args", strings.Join(redactArgValue(args, "--hf-token"), " "))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {
@@ -434,10 +443,24 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 	if offset := p.GetFloatParameter(params, "segmentation_offset"); offset > 0 {
 		args = append(args, "--segmentation-offset", fmt.Sprintf("%.3f", offset))
 	}
+	if preVAD := p.GetStringParameter(params, "pre_diarization_vad"); preVAD != "" {
+		args = append(args, "--pre-vad-method", preVAD)
+	}
 
 	// Device is handled automatically by the script
 
 	return args, nil
+}
+
+func redactArgValue(args []string, sensitiveFlag string) []string {
+	redacted := make([]string, len(args))
+	copy(redacted, args)
+	for i := 0; i < len(redacted)-1; i++ {
+		if redacted[i] == sensitiveFlag {
+			redacted[i+1] = "[REDACTED]"
+		}
+	}
+	return redacted
 }
 
 // parseResult parses the PyAnnote output

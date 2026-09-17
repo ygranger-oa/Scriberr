@@ -41,6 +41,99 @@ def load_audio_for_pipeline(audio_path: str):
     }
 
 
+def build_silero_vad_audio(audio_input, onset: float = None, offset: float = None):
+    """
+    Build a compact speech-only waveform using the locally packaged Silero model.
+    Returns the compacted input and a timeline used to restore original timestamps.
+    """
+    from silero_vad import get_speech_timestamps, load_silero_vad
+
+    waveform = audio_input["waveform"]
+    sample_rate = audio_input["sample_rate"]
+    if waveform.numel() == 0:
+        return audio_input, []
+
+    mono = waveform.mean(dim=0) if waveform.ndim == 2 else waveform.reshape(-1)
+    vad_sample_rate = 16000
+    vad_waveform = mono
+    if sample_rate != vad_sample_rate:
+        vad_waveform = torchaudio.functional.resample(mono, sample_rate, vad_sample_rate)
+
+    model = load_silero_vad()
+    speech_timestamps = get_speech_timestamps(
+        vad_waveform,
+        model,
+        sampling_rate=vad_sample_rate,
+        threshold=onset if onset is not None else 0.5,
+        neg_threshold=offset if offset is not None else 0.35,
+        min_speech_duration_ms=200,
+        min_silence_duration_ms=300,
+        speech_pad_ms=150,
+    )
+    if not speech_timestamps:
+        return audio_input, []
+
+    chunks = []
+    timeline = []
+    compact_cursor = 0
+    for speech_range in speech_timestamps:
+        start = round(speech_range["start"] * sample_rate / vad_sample_rate)
+        end = round(speech_range["end"] * sample_rate / vad_sample_rate)
+        start = max(0, start)
+        end = min(mono.shape[0], end)
+        if end <= start:
+            continue
+        chunk = waveform[:, start:end] if waveform.ndim == 2 else waveform[start:end].unsqueeze(0)
+        chunks.append(chunk)
+        duration = (end - start) / sample_rate
+        timeline.append({
+            "compact_start": compact_cursor / sample_rate,
+            "compact_end": compact_cursor / sample_rate + duration,
+            "original_start": start / sample_rate,
+            "original_end": end / sample_rate,
+        })
+        compact_cursor += end - start
+
+    if not chunks:
+        return audio_input, []
+
+    compact_waveform = torch.cat(chunks, dim=1)
+    return {
+        "waveform": compact_waveform,
+        "sample_rate": sample_rate,
+        "uri": audio_input["uri"],
+    }, timeline
+
+
+def restore_original_time(value: float, timeline):
+    if not timeline:
+        return value
+    for item in timeline:
+        if item["compact_start"] <= value <= item["compact_end"]:
+            return item["original_start"] + (value - item["compact_start"])
+    if value < timeline[0]["compact_start"]:
+        return timeline[0]["original_start"]
+    return timeline[-1]["original_end"]
+
+
+def remap_segments_to_original_time(segments, timeline):
+    if not timeline:
+        return segments
+    remapped = []
+    for segment in segments:
+        for region in timeline:
+            compact_start = max(segment["start"], region["compact_start"])
+            compact_end = min(segment["end"], region["compact_end"])
+            if compact_end <= compact_start:
+                continue
+            item = dict(segment)
+            item["start"] = region["original_start"] + compact_start - region["compact_start"]
+            item["end"] = region["original_start"] + compact_end - region["compact_start"]
+            item["duration"] = item["end"] - item["start"]
+            remapped.append(item)
+    return remapped
+
+
 def diarize_audio(
     audio_path: str,
     output_file: str,
@@ -53,6 +146,7 @@ def diarize_audio(
     device: str = "auto",
     segmentation_onset: float = None,
     segmentation_offset: float = None,
+    pre_vad_method: str = "pyannote",
 ):
     """
     Perform speaker diarization on audio file using PyAnnote.
@@ -115,6 +209,23 @@ def diarize_audio(
 
     try:
         audio_input = load_audio_for_pipeline(audio_path)
+        original_duration = audio_input["waveform"].shape[1] / audio_input["sample_rate"]
+        vad_timeline = []
+        if pre_vad_method == "silero":
+            audio_input, vad_timeline = build_silero_vad_audio(
+                audio_input,
+                onset=segmentation_onset,
+                offset=segmentation_offset,
+            )
+            compact_duration = audio_input["waveform"].shape[1] / audio_input["sample_rate"]
+            print("Pre-diarization VAD: method=silero")
+            print(f"  Speech regions: {len(vad_timeline)}")
+            print(f"  Original duration: {original_duration:.2f} seconds")
+            print(f"  Diarization duration: {compact_duration:.2f} seconds")
+        elif pre_vad_method == "none":
+            print("Pre-diarization VAD disabled")
+        else:
+            print("Pre-diarization VAD: method=pyannote_internal")
 
         # Run diarization
         diarization_params = {}
@@ -140,7 +251,7 @@ def diarize_audio(
                 diarization.write_rttm(rttm)
         else:
             # Save as JSON format
-            save_json_format(diarization, output_file, audio_path)
+            save_json_format(diarization, output_file, audio_path, vad_timeline, pre_vad_method)
 
         # Print summary
         speakers = set()
@@ -174,10 +285,13 @@ def diarize_audio(
         sys.exit(1)
 
 
-def save_json_format(diarization, output_file: str, audio_path: str):
+def save_json_format(diarization, output_file: str, audio_path: str, vad_timeline=None, pre_vad_method: str = "pyannote"):
     """Save diarization results in JSON format."""
+    vad_timeline = vad_timeline or []
     segments = annotation_to_segments(getattr(diarization, "speaker_diarization", diarization))
     exclusive_segments = annotation_to_segments(getattr(diarization, "exclusive_speaker_diarization", None))
+    segments = remap_segments_to_original_time(segments, vad_timeline)
+    exclusive_segments = remap_segments_to_original_time(exclusive_segments, vad_timeline)
     if not exclusive_segments:
         exclusive_segments = segments
 
@@ -199,7 +313,9 @@ def save_json_format(diarization, output_file: str, audio_path: str):
         "processing_info": {
             "total_segments": len(segments),
             "exclusive_segments": len(exclusive_segments),
-            "total_speech_time": sum(seg["duration"] for seg in segments)
+            "total_speech_time": sum(seg["duration"] for seg in segments),
+            "pre_diarization_vad": pre_vad_method,
+            "pre_diarization_vad_regions": len(vad_timeline)
         }
     }
 
@@ -302,6 +418,12 @@ def main():
         type=float,
         help="Voice activity detection offset/min_duration_off (0.0-1.0). Lower values are more sensitive to speech endings."
     )
+    parser.add_argument(
+        "--pre-vad-method",
+        choices=["pyannote", "silero", "none"],
+        default="pyannote",
+        help="Local pre-diarization VAD. Silero uses the model bundled in the installed Python package."
+    )
 
     args = parser.parse_args()
 
@@ -349,6 +471,7 @@ def main():
             device=args.device,
             segmentation_onset=args.segmentation_onset,
             segmentation_offset=args.segmentation_offset,
+            pre_vad_method=args.pre_vad_method,
         )
     except Exception as e:
         print(f"Error during diarization: {e}")

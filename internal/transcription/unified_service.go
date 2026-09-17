@@ -715,6 +715,12 @@ func (u *UnifiedTranscriptionService) convertToPyannoteParams(params models.Whis
 	if params.VadOffset > 0 {
 		paramMap["segmentation_offset"] = params.VadOffset
 	}
+	switch params.VadMethod {
+	case "silero", "none":
+		paramMap["pre_diarization_vad"] = params.VadMethod
+	default:
+		paramMap["pre_diarization_vad"] = "pyannote"
+	}
 
 	return paramMap
 }

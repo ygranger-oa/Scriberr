@@ -395,13 +395,21 @@ func TestPyAnnoteAdapter(t *testing.T) {
 
 	// Test with token explicitly provided
 	paramsWithToken := map[string]interface{}{
-		"hf_token":     "dummy_token",
-		"min_speakers": 2,
-		"max_speakers": 4,
+		"hf_token":              "dummy_token",
+		"min_speakers":          2,
+		"max_speakers":          4,
+		"pre_diarization_vad": "silero",
 	}
 
 	if err := adapter.ValidateParameters(paramsWithToken); err != nil {
 		t.Errorf("Valid parameters with token failed validation: %v", err)
+	}
+
+	paramsWithInvalidPreVAD := map[string]interface{}{
+		"pre_diarization_vad": "cloud",
+	}
+	if err := adapter.ValidateParameters(paramsWithInvalidPreVAD); err == nil {
+		t.Error("Invalid pre_diarization_vad value should have failed validation")
 	}
 }
 
@@ -540,6 +548,34 @@ func TestParameterConversion(t *testing.T) {
 
 	if paramMap["diarize"] != true {
 		t.Errorf("Expected diarize true, got '%v'", paramMap["diarize"])
+	}
+}
+
+func TestPyAnnoteParameterConversionIncludesPreDiarizationVAD(t *testing.T) {
+	mockRepo := new(MockJobRepository)
+	service := NewUnifiedTranscriptionService(mockRepo, "data/temp", "data/transcripts")
+
+	params := models.WhisperXParams{
+		VadMethod: "silero",
+		VadOnset:  0.4,
+		VadOffset: 0.3,
+	}
+
+	paramMap := service.convertToPyannoteParams(params)
+	if paramMap["pre_diarization_vad"] != "silero" {
+		t.Errorf("Expected Silero pre-diarization VAD, got '%v'", paramMap["pre_diarization_vad"])
+	}
+	if paramMap["segmentation_onset"] != 0.4 {
+		t.Errorf("Expected segmentation_onset 0.4, got '%v'", paramMap["segmentation_onset"])
+	}
+	if paramMap["segmentation_offset"] != 0.3 {
+		t.Errorf("Expected segmentation_offset 0.3, got '%v'", paramMap["segmentation_offset"])
+	}
+
+	params.VadMethod = "unsupported"
+	paramMap = service.convertToPyannoteParams(params)
+	if paramMap["pre_diarization_vad"] != "pyannote" {
+		t.Errorf("Unsupported pre-diarization VAD should default to pyannote, got '%v'", paramMap["pre_diarization_vad"])
 	}
 }
 
