@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -17,6 +18,23 @@ import (
 type ProcessingPipeline struct {
 	preprocessors  []interfaces.Preprocessor
 	postprocessors []interfaces.Postprocessor
+}
+
+// AudioProcessingOptions controls conservative, local-only preprocessing.
+type AudioProcessingOptions struct {
+	Normalize     bool
+	TargetLUFS    float64
+	ReduceNoise   bool
+	TempDirectory string
+}
+
+// AudioQualityMetrics contains technical signal measurements only.
+type AudioQualityMetrics struct {
+	PeakDB        float64
+	RMSDB         float64
+	Clipped       bool
+	TooQuiet      bool
+	EmptyChannels []int
 }
 
 // NewProcessingPipeline creates a new processing pipeline
@@ -43,16 +61,21 @@ func (p *ProcessingPipeline) RegisterPostprocessor(postprocessor interfaces.Post
 }
 
 // ProcessAudio applies all applicable preprocessors to the audio input
-func (p *ProcessingPipeline) ProcessAudio(ctx context.Context, input interfaces.AudioInput, capabilities interfaces.ModelCapabilities) (interfaces.AudioInput, error) {
+func (p *ProcessingPipeline) ProcessAudio(ctx context.Context, input interfaces.AudioInput, capabilities interfaces.ModelCapabilities, options AudioProcessingOptions) (interfaces.AudioInput, error) {
 	currentInput := input
 
 	for _, preprocessor := range p.preprocessors {
 		if preprocessor.AppliesTo(capabilities) {
 			logger.Info("Applying preprocessor", "type", fmt.Sprintf("%T", preprocessor))
-			processedInput, err := preprocessor.Process(ctx, currentInput)
+			var processedInput interfaces.AudioInput
+			var err error
+			if audioPreprocessor, ok := preprocessor.(*AudioFormatPreprocessor); ok {
+				processedInput, err = audioPreprocessor.ProcessWithOptions(ctx, currentInput, options)
+			} else {
+				processedInput, err = preprocessor.Process(ctx, currentInput)
+			}
 			if err != nil {
-				logger.Warn("Preprocessor failed, continuing with original input", "error", err)
-				continue
+				return currentInput, err
 			}
 			currentInput = processedInput
 		}
@@ -77,14 +100,36 @@ func (a *AudioFormatPreprocessor) GetRequiredFormats() []string {
 
 // Process converts audio to the required format
 func (a *AudioFormatPreprocessor) Process(ctx context.Context, input interfaces.AudioInput) (interfaces.AudioInput, error) {
+	return a.ProcessWithOptions(ctx, input, AudioProcessingOptions{})
+}
+
+// ProcessWithOptions validates signal quality and creates a derived, model-ready file.
+func (a *AudioFormatPreprocessor) ProcessWithOptions(ctx context.Context, input interfaces.AudioInput, options AudioProcessingOptions) (interfaces.AudioInput, error) {
 	// Check if conversion is needed
 	requiredFormat := "wav"
 	requiredSampleRate := 16000
 	requiredChannels := 1
 
+	metrics, analysisErr := analyzeAudioQuality(ctx, input.FilePath, input.Channels)
+	if analysisErr != nil {
+		logger.Warn("Audio quality analysis unavailable", "error", analysisErr)
+	} else {
+		logger.Info("Audio quality analysis",
+			"peak_db", metrics.PeakDB,
+			"rms_db", metrics.RMSDB,
+			"clipped", metrics.Clipped,
+			"too_quiet", metrics.TooQuiet,
+			"empty_channel_count", len(metrics.EmptyChannels))
+		if len(metrics.EmptyChannels) > 0 {
+			logger.Warn("Audio contains empty or near-empty channels", "channels", metrics.EmptyChannels)
+		}
+	}
+
+	needsFiltering := options.Normalize || options.ReduceNoise
 	if strings.ToLower(input.Format) == requiredFormat &&
 		input.SampleRate == requiredSampleRate &&
-		input.Channels == requiredChannels {
+		input.Channels == requiredChannels &&
+		input.Metadata["probe_verified"] != "false" && !needsFiltering {
 		// No conversion needed
 		return input, nil
 	}
@@ -98,23 +143,43 @@ func (a *AudioFormatPreprocessor) Process(ctx context.Context, input interfaces.
 		"to_channels", requiredChannels)
 
 	// Create output path
-	outputPath := strings.TrimSuffix(input.FilePath, filepath.Ext(input.FilePath)) + "_converted.wav"
+	tempDirectory := options.TempDirectory
+	if tempDirectory == "" {
+		tempDirectory = filepath.Dir(input.FilePath)
+	}
+	if err := os.MkdirAll(tempDirectory, 0755); err != nil {
+		return input, fmt.Errorf("failed to create audio preprocessing directory: %w", err)
+	}
+	outputFile, err := os.CreateTemp(tempDirectory, ".scriberr-audio-*.wav")
+	if err != nil {
+		return input, fmt.Errorf("failed to create derived audio file: %w", err)
+	}
+	outputPath := outputFile.Name()
+	if err := outputFile.Close(); err != nil {
+		_ = os.Remove(outputPath)
+		return input, fmt.Errorf("failed to prepare derived audio file: %w", err)
+	}
 
 	// Build FFmpeg command
-	args := []string{
-		"-i", input.FilePath,
+	args := []string{"-nostdin", "-i", input.FilePath}
+	filters := buildAudioFilters(options)
+	if len(filters) > 0 {
+		args = append(args, "-af", strings.Join(filters, ","))
+	}
+	args = append(args,
 		"-ar", strconv.Itoa(requiredSampleRate),
 		"-ac", strconv.Itoa(requiredChannels),
 		"-c:a", "pcm_s16le",
 		"-y", // Overwrite output file
 		outputPath,
-	}
+	)
 
 	// Execute FFmpeg
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-	output, err := cmd.CombinedOutput()
+	_, err = cmd.CombinedOutput()
 	if err != nil {
-		logger.Error("FFmpeg conversion failed", "output", string(output), "error", err)
+		_ = os.Remove(outputPath)
+		logger.Error("FFmpeg audio preprocessing failed", "error", err)
 		return input, fmt.Errorf("audio conversion failed: %w", err)
 	}
 
@@ -135,11 +200,75 @@ func (a *AudioFormatPreprocessor) Process(ctx context.Context, input interfaces.
 		convertedInput.Size = stat.Size()
 	}
 
-	logger.Info("Audio conversion completed",
-		"output_path", outputPath,
-		"output_size", convertedInput.Size)
+	logger.Info("Audio conversion completed", "output_size", convertedInput.Size)
 
 	return convertedInput, nil
+}
+
+func buildAudioFilters(options AudioProcessingOptions) []string {
+	filters := make([]string, 0, 2)
+	if options.ReduceNoise {
+		filters = append(filters, "afftdn=nr=8:nf=-35:tn=1")
+	}
+	if options.Normalize {
+		target := options.TargetLUFS
+		if target < -24 || target > -12 {
+			target = -16
+		}
+		filters = append(filters, fmt.Sprintf("loudnorm=I=%.1f:TP=-1.5:LRA=11", target))
+	}
+	return filters
+}
+
+var (
+	peakPattern = regexp.MustCompile(`(?m)Peak level dB:\s*(-?inf|[-+0-9.]+)`)
+	rmsPattern  = regexp.MustCompile(`(?m)RMS level dB:\s*(-?inf|[-+0-9.]+)`)
+)
+
+func analyzeAudioQuality(ctx context.Context, path string, channels int) (AudioQualityMetrics, error) {
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-i", path,
+		"-af", "astats=metadata=0:reset=0", "-f", "null", "-")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return AudioQualityMetrics{}, fmt.Errorf("ffmpeg signal analysis failed: %w", err)
+	}
+	return parseAudioQualityMetrics(string(output), channels), nil
+}
+
+func parseAudioQualityMetrics(output string, channels int) AudioQualityMetrics {
+	metrics := AudioQualityMetrics{PeakDB: -100, RMSDB: -100}
+	peaks := parseDBValues(peakPattern, output)
+	rms := parseDBValues(rmsPattern, output)
+	if len(peaks) > 0 {
+		metrics.PeakDB = peaks[len(peaks)-1]
+	}
+	if len(rms) > 0 {
+		metrics.RMSDB = rms[len(rms)-1]
+	}
+	metrics.Clipped = metrics.PeakDB >= -0.1
+	metrics.TooQuiet = metrics.RMSDB < -45
+	for i := 0; i < channels && i < len(rms)-1; i++ { // final value is the overall channel
+		if rms[i] <= -90 {
+			metrics.EmptyChannels = append(metrics.EmptyChannels, i+1)
+		}
+	}
+	return metrics
+}
+
+func parseDBValues(pattern *regexp.Regexp, output string) []float64 {
+	var values []float64
+	for _, match := range pattern.FindAllStringSubmatch(output, -1) {
+		value := -100.0
+		if !strings.EqualFold(match[1], "-inf") {
+			parsed, err := strconv.ParseFloat(match[1], 64)
+			if err != nil {
+				continue
+			}
+			value = parsed
+		}
+		values = append(values, value)
+	}
+	return values
 }
 
 // VoiceActivityDetectionPreprocessor applies VAD preprocessing

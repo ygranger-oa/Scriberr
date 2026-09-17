@@ -1085,6 +1085,7 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		VadOnset:                       0.5,
 		VadOffset:                      0.363,
 		ChunkSize:                      30,
+		AudioTargetLUFS:                -16,
 		Diarize:                        false,
 		SpeakerCountMode:               "automatic",
 		DiarizeModel:                   "pyannote",
@@ -2548,10 +2549,11 @@ func (h *Handler) SubmitQuickTranscription(c *gin.Context) {
 			ReturnCharAlignments: false,
 
 			// VAD (Voice Activity Detection) settings
-			VadMethod: "pyannote",
-			VadOnset:  0.5,
-			VadOffset: 0.363,
-			ChunkSize: 30,
+			VadMethod:       "pyannote",
+			VadOnset:        0.5,
+			VadOffset:       0.363,
+			ChunkSize:       30,
+			AudioTargetLUFS: -16,
 
 			// Diarization settings
 			Diarize:           false,

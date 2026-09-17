@@ -43,6 +43,9 @@ export interface WhisperXParams {
     vad_onset: number;
     vad_offset: number;
     chunk_size: number;
+    audio_normalization: boolean;
+    audio_target_lufs: number;
+    audio_noise_reduction: boolean;
     diarize: boolean;
     speaker_count_mode: "automatic" | "exact" | "range";
     num_speakers?: number;
@@ -109,6 +112,9 @@ const DEFAULT_PARAMS: WhisperXParams = {
     vad_onset: 0.5,
     vad_offset: 0.363,
     chunk_size: 30,
+    audio_normalization: false,
+    audio_target_lufs: -16,
+    audio_noise_reduction: false,
     diarize: false,
     speaker_count_mode: "automatic",
     diarize_model: "pyannote",
@@ -256,7 +262,7 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
     // Reset when dialog opens
     useEffect(() => {
         if (open) {
-            const baseParams = initialParams || DEFAULT_PARAMS;
+            const baseParams = { ...DEFAULT_PARAMS, ...initialParams };
             setParams({
                 ...baseParams,
                 is_multi_track_enabled: isMultiTrack,
@@ -405,6 +411,19 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                     )}
 
                     {/* Model-Specific Configuration */}
+                    <Section title="Audio preprocessing" description="Local preprocessing; the original recording is preserved.">
+                        <div className="space-y-4">
+                            <SwitchField id="audio_normalization" label="Normalize loudness" checked={params.audio_normalization} onCheckedChange={(v) => updateParam('audio_normalization', v)} />
+                            {params.audio_normalization && (
+                                <FormField label="Target loudness (LUFS)" description="-16 LUFS is a conservative speech target.">
+                                    <Input type="number" min={-24} max={-12} step={1} value={params.audio_target_lufs} onChange={(e) => updateParam('audio_target_lufs', parseFloat(e.target.value) || -16)} className={inputClassName} />
+                                </FormField>
+                            )}
+                            <SwitchField id="audio_noise_reduction" label="Light noise reduction" checked={params.audio_noise_reduction} onCheckedChange={(v) => updateParam('audio_noise_reduction', v)} />
+                            <p className="text-xs text-[var(--text-tertiary)]">Quality checks for clipping, weak signal, and empty channels always run locally. Noise reduction is optional because it can alter speech.</p>
+                        </div>
+                    </Section>
+
                     {params.model_family === "whisper" && (
                         <WhisperConfig params={params} updateParam={updateParam} isMultiTrack={isMultiTrack} />
                     )}

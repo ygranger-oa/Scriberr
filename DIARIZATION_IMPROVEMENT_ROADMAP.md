@@ -39,6 +39,16 @@ Objectifs :
 
 ## 2. Normalisation Et Qualite Audio
 
+Statut : implemente avec analyse locale systematique et corrections optionnelles, desactivees par defaut.
+
+Notes :
+
+- l'audio original reste intact ; le pipeline produit au besoin un WAV temporaire mono 16 kHz ;
+- `ffmpeg astats` detecte niveau trop faible, saturation et canaux vides sans journaliser de contenu audio ;
+- la normalisation EBU R128 (`loudnorm`, cible prudente -16 LUFS) est configurable par profil ;
+- une reduction de bruit FFT legere est disponible explicitement, sans activation automatique ;
+- la conversion et les traitements sont appliques a la meme entree derivee pour l'ASR et la diarisation.
+
 Prompt futur :
 
 > Analyse le preprocessing audio existant, puis ajoute une couche optionnelle de normalisation locale avant ASR et diarisation : loudness normalization, verification du sample rate, mono 16 kHz stable, detection de saturation, audio trop faible, canaux vides, et eventuellement reduction de bruit legere via outils open source locaux. Ne detruis jamais l'audio original. Stocke ou logue seulement des metriques techniques non confidentielles.

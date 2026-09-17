@@ -83,6 +83,11 @@ type WhisperXParams struct {
 	VadOffset float64 `json:"vad_offset" gorm:"type:real;default:0.363"`
 	ChunkSize int     `json:"chunk_size" gorm:"type:int;default:30"`
 
+	// Local audio preprocessing. The source recording is never modified.
+	AudioNormalization  bool    `json:"audio_normalization" gorm:"type:boolean;default:false"`
+	AudioTargetLUFS     float64 `json:"audio_target_lufs" gorm:"type:real;default:-16"`
+	AudioNoiseReduction bool   `json:"audio_noise_reduction" gorm:"type:boolean;default:false"`
+
 	// Diarization settings
 	Diarize           bool   `json:"diarize" gorm:"type:boolean;default:false"`
 	SpeakerCountMode  string `json:"speaker_count_mode" gorm:"type:varchar(20);default:'automatic'"`

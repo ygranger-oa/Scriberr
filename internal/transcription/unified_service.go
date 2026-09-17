@@ -256,10 +256,14 @@ func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context,
 	}
 
 	// Apply preprocessing
-	preprocessedInput, err = u.pipeline.ProcessAudio(ctx, audioInput, capabilities)
+	preprocessedInput, err = u.pipeline.ProcessAudio(ctx, audioInput, capabilities, pipeline.AudioProcessingOptions{
+		Normalize:       job.Parameters.AudioNormalization,
+		TargetLUFS:      job.Parameters.AudioTargetLUFS,
+		ReduceNoise:     job.Parameters.AudioNoiseReduction,
+		TempDirectory:   procCtx.TempDirectory,
+	})
 	if err != nil {
-		logger.Warn("Audio preprocessing failed, using original", "error", err)
-		preprocessedInput = audioInput
+		return fmt.Errorf("audio preprocessing failed: %w", err)
 	} else {
 		// Track temporary file for cleanup if preprocessing created one
 		if preprocessedInput.TempFilePath != "" && preprocessedInput.TempFilePath != audioInput.FilePath {
@@ -466,8 +470,9 @@ func (u *UnifiedTranscriptionService) createAudioInput(audioPath string) (interf
 
 	output, err := cmd.Output()
 	if err != nil {
-		logger.Warn("Failed to run ffprobe, using defaults", "error", err, "file", audioPath)
+		logger.Warn("Failed to run ffprobe, using defaults", "error", err)
 		// Fallback to defaults
+		audioInput.Metadata["probe_verified"] = "false"
 		audioInput.SampleRate = 16000
 		audioInput.Channels = 1
 		audioInput.Duration = time.Duration(float64(fileInfo.Size()/32000)) * time.Second
@@ -478,6 +483,7 @@ func (u *UnifiedTranscriptionService) createAudioInput(audioPath string) (interf
 	var probeData ffprobeOutput
 	if err := json.Unmarshal(output, &probeData); err != nil {
 		logger.Warn("Failed to parse ffprobe output, using defaults", "error", err)
+		audioInput.Metadata["probe_verified"] = "false"
 		audioInput.SampleRate = 16000
 		audioInput.Channels = 1
 		audioInput.Duration = time.Duration(float64(fileInfo.Size()/32000)) * time.Second
@@ -522,10 +528,15 @@ func (u *UnifiedTranscriptionService) createAudioInput(audioPath string) (interf
 
 	// Set defaults if no audio stream found
 	if audioInput.SampleRate == 0 {
+		audioInput.Metadata["probe_verified"] = "false"
 		audioInput.SampleRate = 16000
 	}
 	if audioInput.Channels == 0 {
+		audioInput.Metadata["probe_verified"] = "false"
 		audioInput.Channels = 1
+	}
+	if _, exists := audioInput.Metadata["probe_verified"]; !exists {
+		audioInput.Metadata["probe_verified"] = "true"
 	}
 
 	logger.Info("Audio metadata extracted",
