@@ -7,6 +7,9 @@
 FROM node:20-alpine AS ui-builder
 WORKDIR /web
 
+ARG COMMIT_DATE
+ENV VITE_COMMIT_DATE=${COMMIT_DATE}
+
 # Install deps and build web/frontend
 COPY web/frontend/package*.json ./frontend/
 RUN cd frontend \

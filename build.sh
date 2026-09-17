@@ -21,6 +21,7 @@ echo "✅ Old files cleaned"
 
 # Step 2: Build React frontend
 echo "📦 Building React frontend..."
+export VITE_COMMIT_DATE="${VITE_COMMIT_DATE:-$(git show -s --format=%cI HEAD 2>/dev/null || true)}"
 npm run build
 echo "✅ React frontend built successfully"
 

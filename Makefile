@@ -1,4 +1,6 @@
-.PHONY: help docs docs-serve docs-clean website website-dev website-build dev
+.PHONY: help docs docs-serve docs-clean website website-dev website-build dev docker-build docker-build-cuda docker-build-blackwell
+
+COMMIT_DATE := $(shell git show -s --format=%cI HEAD 2>/dev/null)
 
 help: ## Show this help message
 	@echo 'Usage: make [target]'
@@ -87,7 +89,7 @@ build: ## Build Scriberr binary with embedded frontend
 	@cd web/frontend && rm -rf dist/ && rm -rf assets/ 2>/dev/null || true
 	@echo "✓ Build files cleaned"
 	@echo "Building React frontend..."
-	@cd web/frontend && npm run build
+	@cd web/frontend && VITE_COMMIT_DATE="$(COMMIT_DATE)" npm run build
 	@echo "✓ Frontend built"
 	@echo "Copying frontend assets for embedding..."
 	@rm -rf internal/web/dist
@@ -98,6 +100,15 @@ build: ## Build Scriberr binary with embedded frontend
 	@go build -o scriberr cmd/server/main.go
 	@echo "✓ Binary built successfully"
 	@echo "Build complete. Run './scriberr' to start the server"
+
+docker-build: ## Build the standard Docker image with the Git commit date
+	docker build --build-arg COMMIT_DATE="$(COMMIT_DATE)" -t scriberr:local .
+
+docker-build-cuda: ## Build the CUDA Docker image with the Git commit date
+	docker build --build-arg COMMIT_DATE="$(COMMIT_DATE)" -f Dockerfile.cuda -t scriberr:local-cuda .
+
+docker-build-blackwell: ## Build the Blackwell Docker image with the Git commit date
+	docker build --build-arg COMMIT_DATE="$(COMMIT_DATE)" -f Dockerfile.cuda.12.9 -t scriberr:local-blackwell .
 
 build-cli: ## Build CLI binaries for Linux, macOS, and Windows
 	@echo "Building CLI binaries..."

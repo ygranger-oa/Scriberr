@@ -2,11 +2,27 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from "path"
+import { execFileSync } from 'node:child_process'
 
 import { VitePWA } from 'vite-plugin-pwa'
 
+function getCommitDate(): string {
+  if (process.env.VITE_COMMIT_DATE) return process.env.VITE_COMMIT_DATE
+
+  try {
+    return execFileSync('git', ['show', '-s', '--format=%cI', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim()
+  } catch {
+    return ''
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
+  define: {
+    'import.meta.env.VITE_COMMIT_DATE': JSON.stringify(getCommitDate()),
+  },
   plugins: [
     react(),
     tailwindcss(),

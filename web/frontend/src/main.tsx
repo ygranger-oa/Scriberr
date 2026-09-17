@@ -14,6 +14,7 @@ import { ChatEventsProvider } from './contexts/ChatEventsContext'
 import { GlobalUploadProvider } from './contexts/GlobalUploadContext'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { setupAuthInterceptor } from './lib/authInterceptor'
+import { StatusBar } from './components/layout/StatusBar'
 
 // Initialize the global fetch interceptor for auth
 setupAuthInterceptor();
@@ -28,11 +29,14 @@ createRoot(document.getElementById('root')!).render(
           <TooltipProvider>
             <ToastProvider>
               <ChatEventsProvider>
-                <ProtectedRoute>
-                  <GlobalUploadProvider>
-                    <App />
-                  </GlobalUploadProvider>
-                </ProtectedRoute>
+                <div className="min-h-screen pb-7">
+                  <ProtectedRoute>
+                    <GlobalUploadProvider>
+                      <App />
+                    </GlobalUploadProvider>
+                  </ProtectedRoute>
+                  <StatusBar />
+                </div>
               </ChatEventsProvider>
             </ToastProvider>
           </TooltipProvider>
