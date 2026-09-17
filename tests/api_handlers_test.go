@@ -476,6 +476,7 @@ func (suite *APIHandlerTestSuite) TestProfileManagement() {
 			"model":      "base",
 			"batch_size": 16,
 			"device":     "auto",
+			"hf_token":   "secret-hugging-face-token",
 		},
 	}
 
@@ -486,10 +487,27 @@ func (suite *APIHandlerTestSuite) TestProfileManagement() {
 	err := json.Unmarshal(w.Body.Bytes(), &createResponse)
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "Test Profile", createResponse.Name)
+	assert.Nil(suite.T(), createResponse.Parameters.HfToken)
 
 	// Get profile
 	w = suite.makeAuthenticatedRequest("GET", fmt.Sprintf("/api/v1/profiles/%s", createResponse.ID), nil, false)
 	assert.Equal(suite.T(), 200, w.Code)
+	assert.NotContains(suite.T(), w.Body.String(), "secret-hugging-face-token")
+
+	// Clone server-side so hidden secrets are retained without returning them.
+	w = suite.makeAuthenticatedRequest("POST", fmt.Sprintf("/api/v1/profiles/%s/clone", createResponse.ID), nil, false)
+	assert.Equal(suite.T(), 201, w.Code)
+	var cloneResponse models.TranscriptionProfile
+	err = json.Unmarshal(w.Body.Bytes(), &cloneResponse)
+	assert.NoError(suite.T(), err)
+	assert.NotEqual(suite.T(), createResponse.ID, cloneResponse.ID)
+	assert.Equal(suite.T(), "Test Profile (Copy)", cloneResponse.Name)
+	assert.Nil(suite.T(), cloneResponse.Parameters.HfToken)
+	var storedClone models.TranscriptionProfile
+	err = suite.helper.DB.First(&storedClone, "id = ?", cloneResponse.ID).Error
+	assert.NoError(suite.T(), err)
+	assert.NotNil(suite.T(), storedClone.Parameters.HfToken)
+	assert.Equal(suite.T(), "secret-hugging-face-token", *storedClone.Parameters.HfToken)
 
 	// Update profile
 	updateData := map[string]interface{}{
@@ -503,6 +521,31 @@ func (suite *APIHandlerTestSuite) TestProfileManagement() {
 	// Delete profile
 	w = suite.makeAuthenticatedRequest("DELETE", fmt.Sprintf("/api/v1/profiles/%s", createResponse.ID), nil, false)
 	assert.Equal(suite.T(), 200, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestCloneSummaryTemplate() {
+	templateData := map[string]interface{}{
+		"name":                 "Meeting summary",
+		"model":                "test-model",
+		"prompt":               "Summarize this transcript",
+		"include_speaker_info": true,
+	}
+	w := suite.makeAuthenticatedRequest("POST", "/api/v1/summaries/", templateData, false)
+	assert.Equal(suite.T(), 201, w.Code)
+
+	var created models.SummaryTemplate
+	err := json.Unmarshal(w.Body.Bytes(), &created)
+	assert.NoError(suite.T(), err)
+
+	w = suite.makeAuthenticatedRequest("POST", fmt.Sprintf("/api/v1/summaries/%s/clone", created.ID), nil, false)
+	assert.Equal(suite.T(), 201, w.Code)
+	var clone models.SummaryTemplate
+	err = json.Unmarshal(w.Body.Bytes(), &clone)
+	assert.NoError(suite.T(), err)
+	assert.NotEqual(suite.T(), created.ID, clone.ID)
+	assert.Equal(suite.T(), "Meeting summary (Copy)", clone.Name)
+	assert.Equal(suite.T(), created.Prompt, clone.Prompt)
+	assert.True(suite.T(), clone.IncludeSpeakerInfo)
 }
 
 // Test notes management

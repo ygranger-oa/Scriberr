@@ -2293,6 +2293,10 @@ func (h *Handler) ListProfiles(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch profiles"})
 		return
 	}
+	for i := range profiles {
+		profiles[i].Parameters.HfToken = nil
+		profiles[i].Parameters.APIKey = nil
+	}
 	c.JSON(http.StatusOK, profiles)
 }
 
@@ -2330,6 +2334,8 @@ func (h *Handler) CreateProfile(c *gin.Context) {
 		return
 	}
 
+	profile.Parameters.HfToken = nil
+	profile.Parameters.APIKey = nil
 	// Tests expect 200 on create
 	c.JSON(http.StatusOK, profile)
 }
@@ -2353,6 +2359,8 @@ func (h *Handler) GetProfile(c *gin.Context) {
 		return
 	}
 
+	profile.Parameters.HfToken = nil
+	profile.Parameters.APIKey = nil
 	c.JSON(http.StatusOK, profile)
 }
 
@@ -2398,13 +2406,48 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	// GORM Save updates all fields.
 	updatedProfile.ID = existingProfile.ID
 	updatedProfile.CreatedAt = existingProfile.CreatedAt
+	// Secrets are never returned to the UI. An omitted/empty value means that the
+	// existing secret must be retained rather than erased during an ordinary edit.
+	if updatedProfile.Parameters.HfToken == nil || *updatedProfile.Parameters.HfToken == "" {
+		updatedProfile.Parameters.HfToken = existingProfile.Parameters.HfToken
+	}
+	if updatedProfile.Parameters.APIKey == nil || *updatedProfile.Parameters.APIKey == "" {
+		updatedProfile.Parameters.APIKey = existingProfile.Parameters.APIKey
+	}
 
 	if err := h.profileRepo.Update(c.Request.Context(), &updatedProfile); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile"})
 		return
 	}
 
+	updatedProfile.Parameters.HfToken = nil
+	updatedProfile.Parameters.APIKey = nil
 	c.JSON(http.StatusOK, updatedProfile)
+}
+
+// CloneProfile duplicates a transcription profile, including its server-side
+// secrets, without exposing those secrets to the client.
+func (h *Handler) CloneProfile(c *gin.Context) {
+	source, err := h.profileRepo.FindByID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Profile not found"})
+		return
+	}
+
+	clone := *source
+	clone.ID = ""
+	clone.Name = source.Name + " (Copy)"
+	clone.IsDefault = false
+	clone.CreatedAt = time.Time{}
+	clone.UpdatedAt = time.Time{}
+	if err := h.profileRepo.Create(c.Request.Context(), &clone); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clone profile"})
+		return
+	}
+
+	clone.Parameters.HfToken = nil
+	clone.Parameters.APIKey = nil
+	c.JSON(http.StatusCreated, clone)
 }
 
 // @Summary Delete transcription profile

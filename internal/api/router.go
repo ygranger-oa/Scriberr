@@ -168,6 +168,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 			profiles.GET("/:id", handler.GetProfile)
 			profiles.PUT("/:id", handler.UpdateProfile)
 			profiles.DELETE("/:id", handler.DeleteProfile)
+			profiles.POST("/:id/clone", handler.CloneProfile)
 			profiles.POST("/:id/set-default", handler.SetDefaultProfile)
 		}
 
@@ -208,6 +209,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 			summaries.GET("/:id", handler.GetSummaryTemplate)
 			summaries.PUT("/:id", handler.UpdateSummaryTemplate)
 			summaries.DELETE("/:id", handler.DeleteSummaryTemplate)
+			summaries.POST("/:id/clone", handler.CloneSummaryTemplate)
 			summaries.GET("/settings", handler.GetSummarySettings)
 			summaries.POST("/settings", handler.SaveSummarySettings)
 		}

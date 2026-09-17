@@ -169,6 +169,26 @@ func (h *Handler) DeleteSummaryTemplate(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+// CloneSummaryTemplate duplicates a summarization template.
+func (h *Handler) CloneSummaryTemplate(c *gin.Context) {
+	source, err := h.summaryRepo.FindByID(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Template not found"})
+		return
+	}
+
+	clone := *source
+	clone.ID = ""
+	clone.Name = source.Name + " (Copy)"
+	clone.CreatedAt = time.Time{}
+	clone.UpdatedAt = time.Time{}
+	if err := h.summaryRepo.Create(c.Request.Context(), &clone); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clone template"})
+		return
+	}
+	c.JSON(http.StatusCreated, clone)
+}
+
 // GetSummarySettings returns the global summary settings (default model)
 // @Summary Get summary settings
 // @Description Get global summarization settings

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { MoreVertical, Trash2, Settings, Terminal } from "lucide-react";
+import { Copy, MoreVertical, Trash2, Settings, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/features/auth/hooks/useAuth";
@@ -46,6 +46,7 @@ export function ProfilesTable({
 	const [deletingProfiles, setDeletingProfiles] = useState<Set<string>>(
 		new Set(),
 	);
+	const [cloningProfiles, setCloningProfiles] = useState<Set<string>>(new Set());
 
 	const fetchProfiles = useCallback(async () => {
 		try {
@@ -104,6 +105,27 @@ export function ProfilesTable({
 		},
 		[onProfileChange, getAuthHeaders],
 	);
+
+	const handleClone = useCallback(async (profileId: string) => {
+		setOpenPopovers((prev) => ({ ...prev, [profileId]: false }));
+		try {
+			setCloningProfiles((prev) => new Set(prev).add(profileId));
+			const response = await fetch(`/api/v1/profiles/${profileId}/clone`, {
+				method: "POST",
+				headers: { ...getAuthHeaders() },
+			});
+			if (!response.ok) throw new Error("Failed to clone profile");
+			onProfileChange();
+		} catch {
+			alert("Failed to clone profile");
+		} finally {
+			setCloningProfiles((prev) => {
+				const next = new Set(prev);
+				next.delete(profileId);
+				return next;
+			});
+		}
+	}, [getAuthHeaders, onProfileChange]);
 
 	const formatDate = useCallback((dateString: string) => {
 		return new Date(dateString).toLocaleDateString("en-US", {
@@ -214,6 +236,16 @@ export function ProfilesTable({
 									</Button>
 								</PopoverTrigger>
 								<PopoverContent className="w-32 bg-[var(--bg-card)] border-[var(--border-subtle)] p-1 text-[var(--text-primary)]">
+									<Button
+										variant="ghost"
+										size="sm"
+										className="w-full justify-start h-7 text-xs"
+										disabled={cloningProfiles.has(profile.id)}
+										onClick={() => handleClone(profile.id)}
+									>
+										<Copy className="mr-2 h-3 w-3" />
+										Clone
+									</Button>
 									<AlertDialog>
 										<AlertDialogTrigger asChild>
 											<Button

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
-import { Trash2, FileText } from "lucide-react";
+import { Copy, Trash2, FileText } from "lucide-react";
 import type { SummaryTemplate } from "./SummaryTemplateDialog";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 
@@ -18,6 +18,7 @@ export function SummaryTemplatesTable({ onEdit, refreshTrigger = 0, disabled = f
   const [loading, setLoading] = useState(true);
   const [openPop, setOpenPop] = useState<Record<string, boolean>>({});
   const [deleting, setDeleting] = useState<Set<string>>(new Set());
+  const [cloning, setCloning] = useState<Set<string>>(new Set());
 
   const fetchItems = useCallback(async () => {
     try {
@@ -46,6 +47,20 @@ export function SummaryTemplatesTable({ onEdit, refreshTrigger = 0, disabled = f
       }
     } finally {
       setDeleting(prev => { const s = new Set(prev); s.delete(id); return s; });
+    }
+  };
+
+  const handleClone = async (id: string) => {
+    setOpenPop(prev => ({ ...prev, [id]: false }));
+    try {
+      setCloning(prev => new Set(prev).add(id));
+      const res = await fetch(`/api/v1/summaries/${id}/clone`, { method: 'POST', headers: { ...getAuthHeaders() } });
+      if (!res.ok) throw new Error('Failed to clone template');
+      await fetchItems();
+    } catch {
+      alert('Failed to clone template');
+    } finally {
+      setCloning(prev => { const next = new Set(prev); next.delete(id); return next; });
     }
   };
 
@@ -101,6 +116,9 @@ export function SummaryTemplatesTable({ onEdit, refreshTrigger = 0, disabled = f
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-32 bg-[var(--bg-card)] border-[var(--border-subtle)] p-1 text-[var(--text-primary)]">
+                    <Button variant="ghost" size="sm" className="w-full justify-start h-7 text-xs" disabled={cloning.has(tpl.id!)} onClick={() => handleClone(tpl.id!)}>
+                      <Copy className="mr-2 h-3 w-3" /> Clone
+                    </Button>
                     <AlertDialog>
                       <AlertDialogTrigger asChild>
                         <Button variant="ghost" size="sm" className="w-full justify-start h-7 text-xs hover:bg-[var(--error)]/10 text-[var(--error)] hover:text-[var(--error)]" disabled={deleting.has(tpl.id!)}>
