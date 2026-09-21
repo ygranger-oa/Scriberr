@@ -123,6 +123,12 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 		a.LogProcessingEnd(procCtx, time.Since(startTime), nil)
 	}()
 
+	if logFile, err := a.OpenProcessingLog(procCtx.OutputDirectory, procCtx.JobID, "transcription"); err != nil {
+		logger.Warn("Failed to write processing log separator", "error", err)
+	} else {
+		_ = logFile.Close()
+	}
+
 	// Helper to write to job log file
 	writeLog := func(format string, args ...interface{}) {
 		logPath := filepath.Join(procCtx.OutputDirectory, "transcription.log")

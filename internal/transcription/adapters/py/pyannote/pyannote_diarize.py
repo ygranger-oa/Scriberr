@@ -8,6 +8,8 @@ import argparse
 import json
 import sys
 import os
+import time
+import traceback
 from pathlib import Path
 from pyannote.audio import Pipeline
 import torch
@@ -160,20 +162,22 @@ def diarize_audio(
             token=hf_token
         )
 
-        # Move to specified device
-        # if device == "auto" or device == "cuda":
+        # Move to the requested device. Never silently fall back when CUDA was
+        # explicitly requested: that can turn a short GPU job into a very long
+        # CPU job without making the cause visible.
         try:
-            if torch.cuda.is_available():
+            if device == "cuda" and not torch.cuda.is_available():
+                raise RuntimeError("CUDA was requested for diarization but is not available to PyTorch")
+            if device == "cuda" or (device == "auto" and torch.cuda.is_available()):
                 pipeline = pipeline.to(torch.device("cuda"))
-                print("Using CUDA for diarization")
-            elif device == "cuda":
-                print("CUDA requested but not available, falling back to CPU")
+                gpu_name = torch.cuda.get_device_name(torch.cuda.current_device())
+                print(f"Using CUDA for diarization: {gpu_name}")
             else:
-                print("CUDA not available, using CPU")
-        except ImportError:
-            print("PyTorch not available for CUDA, using CPU")
+                pipeline = pipeline.to(torch.device("cpu"))
+                print("Using CPU for diarization")
         except Exception as e:
-            print(f"Error moving to device: {e}, using CPU")
+            print(f"Error selecting diarization device: {e}")
+            raise
 
         # Apply segmentation thresholds if provided
         if segmentation_onset is not None or segmentation_offset is not None:
@@ -181,20 +185,29 @@ def diarize_audio(
                 # Get current parameters
                 params = pipeline.parameters(instantiated=True)
 
-                # Update segmentation thresholds
+                # Community-1 does not necessarily expose the legacy
+                # segmentation hyperparameters. Only update parameters that
+                # the loaded pipeline actually declares.
                 if "segmentation" in params:
-                    if segmentation_onset is not None:
+                    segmentation_params = params["segmentation"]
+                    changed = False
+                    if segmentation_onset is not None and "threshold" in segmentation_params:
                         params["segmentation"]["threshold"] = segmentation_onset
                         print(f"Set segmentation onset threshold: {segmentation_onset}")
-                    if segmentation_offset is not None:
-                        # PyAnnote uses min_duration_off for offset behavior
+                        changed = True
+                    elif segmentation_onset is not None:
+                        print("Segmentation onset is not supported by this pipeline; using its trained default")
+                    if segmentation_offset is not None and "min_duration_off" in segmentation_params:
                         params["segmentation"]["min_duration_off"] = segmentation_offset
                         print(f"Set segmentation offset (min_duration_off): {segmentation_offset}")
+                        changed = True
+                    elif segmentation_offset is not None:
+                        print("Segmentation offset is not supported by this pipeline; using its trained default")
 
-                    # Instantiate pipeline with new parameters
-                    pipeline.instantiate(params)
+                    if changed:
+                        pipeline.instantiate(params)
                 else:
-                    print("Warning: Could not find segmentation parameters in pipeline")
+                    print("Segmentation tuning is not supported by this pipeline; using its trained defaults")
             except Exception as e:
                 print(f"Warning: Could not set segmentation thresholds: {e}")
                 print("Continuing with default thresholds")
@@ -236,6 +249,8 @@ def diarize_audio(
         if max_speakers is not None:
             diarization_params["max_speakers"] = max_speakers
 
+        inference_started = time.monotonic()
+        print(f"Starting diarization inference ({original_duration:.2f} seconds of source audio)")
         if diarization_params:
             print(f"Using speaker constraints: {diarization_params}")
             diarization = pipeline(audio_input, **diarization_params)
@@ -243,12 +258,14 @@ def diarize_audio(
             print("Using automatic speaker detection")
             diarization = pipeline(audio_input)
 
-        print(f"Diarization completed. Saving results to: {output_file}")
+        print(f"Diarization inference completed in {time.monotonic() - inference_started:.1f} seconds")
+        print(f"Saving results to: {output_file}")
 
         if output_format == "rttm":
             # Save the diarization output to RTTM format
+            annotation = getattr(diarization, "speaker_diarization", diarization)
             with open(output_file, "w") as rttm:
-                diarization.write_rttm(rttm)
+                annotation.write_rttm(rttm)
         else:
             # Save as JSON format
             save_json_format(diarization, output_file, audio_path, vad_timeline, pre_vad_method)
@@ -282,6 +299,7 @@ def diarize_audio(
 
     except Exception as e:
         print(f"Error during diarization: {e}")
+        traceback.print_exc()
         sys.exit(1)
 
 

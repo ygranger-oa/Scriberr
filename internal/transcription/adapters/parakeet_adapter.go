@@ -201,7 +201,7 @@ func (p *ParakeetAdapter) setupParakeetEnvironment() error {
 
 	// Run uv sync
 	logger.Info("Installing Parakeet dependencies")
-	cmd := exec.Command("uv", "sync", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--system-certs")
 	cmd.Dir = p.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -329,12 +329,12 @@ func (p *ParakeetAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 		logger.Info("Using buffered inference for long audio",
 			"duration_secs", audioDuration.Seconds(),
 			"threshold_secs", chunkThreshold)
-		result, err = p.transcribeBuffered(ctx, audioInput, params, tempDir, procCtx.OutputDirectory)
+		result, err = p.transcribeBuffered(ctx, audioInput, params, tempDir, procCtx.OutputDirectory, procCtx.JobID)
 	} else {
 		logger.Info("Using standard transcription for short audio",
 			"duration_secs", audioDuration.Seconds(),
 			"threshold_secs", chunkThreshold)
-		result, err = p.transcribeStandard(ctx, audioInput, params, tempDir, procCtx.OutputDirectory)
+		result, err = p.transcribeStandard(ctx, audioInput, params, tempDir, procCtx.OutputDirectory, procCtx.JobID)
 	}
 
 	if err != nil {
@@ -376,7 +376,7 @@ func (p *ParakeetAdapter) detectAudioDuration(audioPath string) (float64, error)
 }
 
 // transcribeStandard uses the standard Parakeet transcription (original method)
-func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfaces.AudioInput, params map[string]interface{}, tempDir, outputDir string) (*interfaces.TranscriptResult, error) {
+func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfaces.AudioInput, params map[string]interface{}, tempDir, outputDir, jobID string) (*interfaces.TranscriptResult, error) {
 	// Build command arguments
 	args, err := p.buildParakeetArgs(input, params, tempDir)
 	if err != nil {
@@ -388,7 +388,7 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(outputDir, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := p.OpenProcessingLog(outputDir, jobID, "transcription")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -425,7 +425,7 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 }
 
 // transcribeBuffered uses NeMo's buffered inference for long audio
-func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfaces.AudioInput, params map[string]interface{}, tempDir, outputDir string) (*interfaces.TranscriptResult, error) {
+func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfaces.AudioInput, params map[string]interface{}, tempDir, outputDir, jobID string) (*interfaces.TranscriptResult, error) {
 	// Build command arguments for buffered inference
 	args, err := p.buildBufferedArgs(input, params, tempDir)
 	if err != nil {
@@ -437,7 +437,7 @@ func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfac
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(outputDir, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := p.OpenProcessingLog(outputDir, jobID, "transcription-buffered")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -479,7 +479,7 @@ func (p *ParakeetAdapter) buildParakeetArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "parakeet_transcribe.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", p.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 	}
@@ -595,7 +595,7 @@ func (p *ParakeetAdapter) buildBufferedArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "parakeet_transcribe_buffered.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", p.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 		"--chunk-len", chunkDuration,

@@ -223,7 +223,7 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 	}
 
 	// Check if PyAnnote is already available (using cache to speed up repeated checks)
-	if CheckEnvironmentReady(p.envPath, "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad") {
+	if CheckEnvironmentReady(p.envPath, "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad; import torchcodec") {
 		logger.Info("PyAnnote already available in environment")
 		// Still ensure script exists
 		if err := p.copyDiarizationScript(); err != nil {
@@ -239,9 +239,9 @@ func (p *PyAnnoteAdapter) PrepareEnvironment(ctx context.Context) error {
 	}
 
 	// Verify PyAnnote is now available
-	testCmd := exec.Command("uv", "run", "--native-tls", "--project", p.envPath, "python", "-c", "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad")
-	if testCmd.Run() != nil {
-		logger.Warn("PyAnnote environment test still failed after setup")
+	testCmd := exec.Command("uv", "run", "--system-certs", "--project", p.envPath, "python", "-c", "from pyannote.audio import Pipeline; from silero_vad import load_silero_vad; import torchcodec")
+	if err := testCmd.Run(); err != nil {
+		return fmt.Errorf("PyAnnote environment validation failed after setup: %w", err)
 	}
 
 	p.initialized = true
@@ -277,7 +277,7 @@ func (p *PyAnnoteAdapter) setupPyAnnoteEnvironment() error {
 
 	// Run uv sync
 	logger.Info("Installing PyAnnote dependencies")
-	cmd := exec.Command("uv", "sync", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--system-certs")
 	cmd.Dir = p.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -354,7 +354,7 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := p.OpenProcessingLog(procCtx.OutputDirectory, procCtx.JobID, "diarization")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -366,19 +366,24 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 	logger.Info("Executing PyAnnote command", "args", strings.Join(redactArgValue(args, "--hf-token"), " "))
 
 	if err := cmd.Run(); err != nil {
-		if ctx.Err() == context.Canceled {
-			return nil, fmt.Errorf("diarization was cancelled")
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("diarization stopped after %s: %w", time.Since(startTime).Round(time.Second), ctx.Err())
 		}
 
 		// Read tail of log file for context
 		logPath := filepath.Join(procCtx.OutputDirectory, "transcription.log")
-		logTail, readErr := p.ReadLogTail(logPath, 2048)
+		logTail, readErr := p.ReadLogTail(logPath, 8192)
 		if readErr != nil {
 			logger.Warn("Failed to read log tail", "error", readErr)
 		}
 
-		logger.Error("PyAnnote execution failed", "error", err)
-		return nil, fmt.Errorf("PyAnnote execution failed: %w\nLogs:\n%s", err, logTail)
+		failureHint := ""
+		if exitErr, ok := err.(*exec.ExitError); ok && (exitErr.ExitCode() == 137 || strings.Contains(strings.ToLower(err.Error()), "signal: killed")) {
+			failureHint = "\nThe operating system killed the PyAnnote process. Check container/GPU memory usage and the host OOM logs."
+		}
+
+		logger.Error("PyAnnote execution failed", "error", err, "duration", time.Since(startTime).Round(time.Second))
+		return nil, fmt.Errorf("PyAnnote execution failed after %s: %w%s\nLogs:\n%s", time.Since(startTime).Round(time.Second), err, failureHint, logTail)
 	}
 
 	// Parse result
@@ -411,7 +416,7 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 
 	scriptPath := filepath.Join(p.envPath, "pyannote_diarize.py")
 	args := []string{
-		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", p.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 		"--hf-token", p.GetStringParameter(params, "hf_token"),
@@ -446,8 +451,9 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 	if preVAD := p.GetStringParameter(params, "pre_diarization_vad"); preVAD != "" {
 		args = append(args, "--pre-vad-method", preVAD)
 	}
-
-	// Device is handled automatically by the script
+	if device := p.GetStringParameter(params, "device"); device != "" {
+		args = append(args, "--device", device)
+	}
 
 	return args, nil
 }

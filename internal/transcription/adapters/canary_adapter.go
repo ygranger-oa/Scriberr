@@ -233,7 +233,7 @@ func (c *CanaryAdapter) setupCanaryEnvironment() error {
 
 	// Run uv sync
 	logger.Info("Installing Canary dependencies")
-	cmd := exec.Command("uv", "sync", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--system-certs")
 	cmd.Dir = c.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -346,7 +346,7 @@ func (c *CanaryAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := c.OpenProcessingLog(procCtx.OutputDirectory, procCtx.JobID, "transcription")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -398,7 +398,7 @@ func (c *CanaryAdapter) buildCanaryArgs(input interfaces.AudioInput, params map[
 
 	scriptPath := filepath.Join(c.envPath, "canary_transcribe.py")
 	args := []string{
-		"run", "--native-tls", "--project", c.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", c.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 	}

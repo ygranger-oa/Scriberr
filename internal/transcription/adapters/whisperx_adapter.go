@@ -377,7 +377,7 @@ func (w *WhisperXAdapter) updateWhisperXDependencies(whisperxPath string) error 
 
 // uvSyncWhisperX runs uv sync for WhisperX
 func (w *WhisperXAdapter) uvSyncWhisperX(whisperxPath string) error {
-	cmd := exec.Command("uv", "sync", "--all-extras", "--dev", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--all-extras", "--dev", "--system-certs")
 	cmd.Dir = whisperxPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -447,7 +447,7 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 	cmd.Env = append(env, "PYTHONUNBUFFERED=1")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := w.OpenProcessingLog(procCtx.OutputDirectory, procCtx.JobID, "transcription")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -497,7 +497,7 @@ func (w *WhisperXAdapter) buildWhisperXArgs(input interfaces.AudioInput, params 
 	whisperxPath := filepath.Join(w.envPath, "WhisperX")
 
 	args := []string{
-		"run", "--native-tls", "--project", whisperxPath, "python", "-m", "whisperx",
+		"run", "--system-certs", "--project", whisperxPath, "python", "-m", "whisperx",
 		input.FilePath,
 		"--output_dir", outputDir,
 	}

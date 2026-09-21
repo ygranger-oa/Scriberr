@@ -230,7 +230,7 @@ func (s *SortformerAdapter) setupSortformerEnvironment() error {
 
 	// Run uv sync
 	logger.Info("Installing Sortformer dependencies")
-	cmd := exec.Command("uv", "sync", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--system-certs")
 	cmd.Dir = s.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -341,7 +341,7 @@ func (s *SortformerAdapter) Diarize(ctx context.Context, input interfaces.AudioI
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
-	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	logFile, err := s.OpenProcessingLog(procCtx.OutputDirectory, procCtx.JobID, "diarization")
 	if err != nil {
 		logger.Warn("Failed to create log file", "error", err)
 	} else {
@@ -398,7 +398,7 @@ func (s *SortformerAdapter) buildSortformerArgs(input interfaces.AudioInput, par
 
 	scriptPath := filepath.Join(s.envPath, "sortformer_diarize.py")
 	args := []string{
-		"run", "--native-tls", "--project", s.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", s.envPath, "python", scriptPath,
 		input.FilePath,
 		outputFile,
 	}

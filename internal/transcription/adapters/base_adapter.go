@@ -66,7 +66,7 @@ func CheckEnvironmentReady(envPath, importStatement string) bool {
 		envCacheMutex.RUnlock()
 
 		// Run the actual check
-		testCmd := exec.Command("uv", "run", "--native-tls", "--project", envPath, "python", "-c", importStatement)
+		testCmd := exec.Command("uv", "run", "--system-certs", "--project", envPath, "python", "-c", importStatement)
 		ready := testCmd.Run() == nil
 
 		// Cache the result
@@ -516,6 +516,29 @@ func (b *BaseAdapter) CreateDefaultMetadata(params map[string]interface{}) map[s
 	}
 
 	return metadata
+}
+
+// OpenProcessingLog opens the persistent job log and appends a single,
+// timestamped separator before output from a new model execution.
+func (b *BaseAdapter) OpenProcessingLog(outputDirectory, jobID, operation string) (*os.File, error) {
+	logPath := filepath.Join(outputDirectory, "transcription.log")
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return nil, err
+	}
+
+	header := fmt.Sprintf(
+		"\n================================================================================\n"+
+			"Attempt started: %s\nJob: %s\nModel: %s\nOperation: %s\n"+
+			"================================================================================\n",
+		time.Now().Format(time.RFC3339), jobID, b.modelID, operation,
+	)
+	if _, err := logFile.WriteString(header); err != nil {
+		_ = logFile.Close()
+		return nil, fmt.Errorf("failed to write processing log separator: %w", err)
+	}
+
+	return logFile, nil
 }
 
 // LogProcessingStart logs the start of processing
