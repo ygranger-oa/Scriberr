@@ -358,7 +358,7 @@ export const AudioFilesTable = memo(function AudioFilesTable({
 	}, [selectedJobId, refetch, onTranscribe, data, getAuthHeaders]);
 
 	// Handle actual transcription start with profile parameters
-	const handleStartTranscriptionWithProfile = useCallback(async (params: WhisperXParams) => {
+	const handleStartTranscriptionWithProfile = useCallback(async (params: WhisperXParams, profileId: string) => {
 		if (!selectedJobId) return;
 
 		// Validate multi-track compatibility
@@ -376,13 +376,13 @@ export const AudioFilesTable = memo(function AudioFilesTable({
 		try {
 			setTranscriptionLoading(true);
 
-			const response = await fetch(`/api/v1/transcription/${selectedJobId}/start`, {
+			const response = await fetch(`/api/v1/transcription/${selectedJobId}/start?profile_id=${encodeURIComponent(profileId)}`, {
 				method: "POST",
 				headers: {
 					...getAuthHeaders(),
 					"Content-Type": "application/json",
 				},
-				body: JSON.stringify(params),
+				body: JSON.stringify({}),
 			});
 
 			if (response.ok) {
@@ -472,7 +472,7 @@ export const AudioFilesTable = memo(function AudioFilesTable({
 	}, [selectedFile, getAuthHeaders, refetch]);
 
 	// Bulk Actions Handlers
-	const handleBulkTranscribe = useCallback(async (params: WhisperXParams) => {
+	const handleBulkTranscribe = useCallback(async (params: WhisperXParams, profileId?: string) => {
 		const selectedIds = Object.keys(rowSelection);
 		if (selectedIds.length === 0) return;
 
@@ -487,13 +487,14 @@ export const AudioFilesTable = memo(function AudioFilesTable({
 				if (job.is_multi_track && !params.is_multi_track_enabled) continue;
 				if (!job.is_multi_track && params.is_multi_track_enabled) continue;
 
-				await fetch(`/api/v1/transcription/${id}/start`, {
+				const profileQuery = profileId ? `?profile_id=${encodeURIComponent(profileId)}` : "";
+				await fetch(`/api/v1/transcription/${id}/start${profileQuery}`, {
 					method: "POST",
 					headers: {
 						...getAuthHeaders(),
 						"Content-Type": "application/json",
 					},
-					body: JSON.stringify(params),
+					body: JSON.stringify(profileId ? {} : params),
 				});
 			}
 
@@ -549,11 +550,12 @@ export const AudioFilesTable = memo(function AudioFilesTable({
 		}
 	};
 
-	const onStartTranscribeWithProfile = (params: WhisperXParams) => {
+	const onStartTranscribeWithProfile = (params: WhisperXParams, profileId?: string) => {
+		if (!profileId) return;
 		if (Object.keys(rowSelection).length > 0) {
-			handleBulkTranscribe(params);
+			handleBulkTranscribe(params, profileId);
 		} else {
-			handleStartTranscriptionWithProfile(params);
+			handleStartTranscriptionWithProfile(params, profileId);
 		}
 	};
 

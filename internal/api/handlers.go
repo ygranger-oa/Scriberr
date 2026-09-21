@@ -1110,8 +1110,20 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		IsMultiTrackEnabled:            false,
 	}
 
-	// Parse request body parameters, overriding defaults
-	if err := c.ShouldBindJSON(&requestParams); err != nil {
+	// When a profile is selected, reload it server-side so stored secrets are
+	// preserved without ever returning them to or accepting them from the browser.
+	if profileID := c.Query("profile_id"); profileID != "" {
+		profile, err := h.profileRepo.FindByID(c.Request.Context(), profileID)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Transcription profile not found"})
+			} else {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load transcription profile"})
+			}
+			return nil, fmt.Errorf("failed to load transcription profile %s: %w", profileID, err)
+		}
+		requestParams = profile.Parameters
+	} else if err := c.ShouldBindJSON(&requestParams); err != nil {
 		// Use defaults if JSON parsing fails
 		logger.Debug("Failed to parse JSON parameters, using defaults", "error", err)
 	}
@@ -1125,16 +1137,12 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		"diarize_model", requestParams.DiarizeModel,
 		"language", requestParams.Language)
 
-	// Validate NVIDIA-specific constraints
-	if requestParams.ModelFamily == "nvidia_parakeet" || requestParams.ModelFamily == "nvidia_canary" {
-		// Both NVIDIA models support multiple European languages
-		// No language restriction needed - models support auto-detection
-
-		// NVIDIA models support diarization via Pyannote integration or NVIDIA Sortformer
-		if requestParams.Diarize && requestParams.DiarizeModel == "pyannote" && (requestParams.HfToken == nil || *requestParams.HfToken == "") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Hugging Face token (hf_token) is required for Pyannote diarization"})
-			return nil, fmt.Errorf("hf_token required")
-		}
+	// PyAnnote always needs a Hugging Face token, irrespective of the selected
+	// transcription engine. Validate it before queuing an expensive job.
+	if requestParams.Diarize && requestParams.DiarizeModel == "pyannote" &&
+		(requestParams.HfToken == nil || *requestParams.HfToken == "") && os.Getenv("HF_TOKEN") == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Hugging Face token is missing from the selected profile"})
+		return nil, fmt.Errorf("hf_token required")
 	}
 
 	// Validate multi-track compatibility
@@ -2511,6 +2519,8 @@ func (h *Handler) SetDefaultProfile(c *gin.Context) {
 		return
 	}
 
+	profile.Parameters.HfToken = nil
+	profile.Parameters.APIKey = nil
 	c.JSON(http.StatusOK, gin.H{"message": "Default profile set successfully", "profile": profile})
 }
 
@@ -2824,6 +2834,8 @@ func (h *Handler) GetUserDefaultProfile(c *gin.Context) {
 		// Try to find a default profile from profiles table
 		profile, err := h.profileRepo.FindDefault(c.Request.Context())
 		if err == nil {
+			profile.Parameters.HfToken = nil
+			profile.Parameters.APIKey = nil
 			c.JSON(http.StatusOK, profile)
 			return
 		}
@@ -2834,6 +2846,8 @@ func (h *Handler) GetUserDefaultProfile(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "No profiles available"})
 			return
 		}
+		profiles[0].Parameters.HfToken = nil
+		profiles[0].Parameters.APIKey = nil
 		c.JSON(http.StatusOK, profiles[0])
 		return
 	}
@@ -2847,10 +2861,14 @@ func (h *Handler) GetUserDefaultProfile(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "No profiles available"})
 			return
 		}
+		profiles[0].Parameters.HfToken = nil
+		profiles[0].Parameters.APIKey = nil
 		c.JSON(http.StatusOK, profiles[0])
 		return
 	}
 
+	profile.Parameters.HfToken = nil
+	profile.Parameters.APIKey = nil
 	c.JSON(http.StatusOK, profile)
 }
 
