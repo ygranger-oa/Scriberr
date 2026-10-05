@@ -69,6 +69,15 @@ export function useSummarizer(audioId: string) {
                 }),
             });
 
+            if (!res.ok) {
+                let message = `Summary request failed (HTTP ${res.status})`;
+                try {
+                    const data = await res.json();
+                    if (data?.error) message = data.error;
+                } catch { /* non-JSON error body */ }
+                throw new Error(message);
+            }
+
             if (!res.body) {
                 throw new Error('Failed to start summary stream.');
             }

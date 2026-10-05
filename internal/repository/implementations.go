@@ -350,9 +350,14 @@ func (r *summaryRepository) SaveSummary(ctx context.Context, summary *models.Sum
 
 func (r *summaryRepository) GetLatestSummary(ctx context.Context, transcriptionID string) (*models.Summary, error) {
 	var summary models.Summary
-	err := r.db.WithContext(ctx).Where("transcription_id = ?", transcriptionID).Order("created_at DESC").First(&summary).Error
-	if err != nil {
-		return nil, err
+	// Use Find+Limit instead of First: a missing summary is a normal state and
+	// should not be logged by GORM as an error.
+	res := r.db.WithContext(ctx).Where("transcription_id = ?", transcriptionID).Order("created_at DESC").Limit(1).Find(&summary)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return &summary, nil
 }
