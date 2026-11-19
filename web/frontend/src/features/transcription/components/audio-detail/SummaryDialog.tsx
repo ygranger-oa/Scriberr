@@ -21,7 +21,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
@@ -73,6 +73,7 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
     const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
     const [tplPopoverOpen, setTplPopoverOpen] = useState(false);
     const [showOutput, setShowOutput] = useState(false);
+    const summaryRef = useRef<HTMLDivElement>(null);
 
     const selectedTemplate = templates.find(t => t.id === selectedTemplateId);
 
@@ -128,6 +129,47 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
+    };
+
+    // PDF export: prints the rendered summary in an isolated iframe (no dependency,
+    // nothing leaves the browser). The user picks "Save as PDF" in the print dialog.
+    const handleDownloadPdf = () => {
+        const node = summaryRef.current;
+        if (!node) return;
+
+        const title = audioFile?.title || "summary";
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+        document.body.appendChild(iframe);
+        const doc = iframe.contentDocument;
+        const win = iframe.contentWindow;
+        if (!doc || !win) {
+            document.body.removeChild(iframe);
+            return;
+        }
+
+        const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
+            .map(el => el.outerHTML)
+            .join('\n');
+        const safeTitle = title.replace(/[<>&"]/g, '');
+        doc.open();
+        doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle} - summary</title>${styles}
+<style>
+  html, body { background: #fff !important; color: #171717 !important; }
+  body { padding: 24px; }
+  .prose, .prose * { color: #171717 !important; }
+  @page { margin: 16mm; }
+</style></head><body></body></html>`);
+        doc.close();
+        doc.body.innerHTML = `<div class="prose max-w-none">${node.innerHTML}</div>`;
+
+        const cleanup = () => setTimeout(() => iframe.remove(), 500);
+        win.onafterprint = cleanup;
+        // Give stylesheets a moment to load before printing
+        setTimeout(() => {
+            win.focus();
+            win.print();
+        }, 400);
     };
 
     // Handle close - prevent closing during streaming
@@ -201,7 +243,17 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
                                 className="h-9 rounded-full border-[rgba(0,0,0,0.06)] dark:border-[rgba(255,255,255,0.08)] hover:bg-[var(--bg-main)] transition-all"
                             >
                                 <Download className="h-3.5 w-3.5" />
-                                Download
+                                Download .md
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={handleDownloadPdf}
+                                disabled={isStreaming || (!streamContent && !existingSummary?.content)}
+                                className="h-9 rounded-full border-[rgba(0,0,0,0.06)] dark:border-[rgba(255,255,255,0.08)] hover:bg-[var(--bg-main)] transition-all"
+                            >
+                                <Download className="h-3.5 w-3.5" />
+                                Download PDF
                             </Button>
                         </div>
 
@@ -221,7 +273,7 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
                                     <p className="text-xs mt-1">This may take a moment</p>
                                 </div>
                             ) : (
-                                <div className="prose prose-stone dark:prose-invert max-w-none text-[#171717] dark:text-[#EDEDED] leading-relaxed">
+                                <div ref={summaryRef} className="prose prose-stone dark:prose-invert max-w-none text-[#171717] dark:text-[#EDEDED] leading-relaxed">
                                     <ReactMarkdown
                                         remarkPlugins={[remarkMath]}
                                         rehypePlugins={[rehypeRaw as any, rehypeKatex as any, rehypeHighlight as any]} // eslint-disable-line @typescript-eslint/no-explicit-any
