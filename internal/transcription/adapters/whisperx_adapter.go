@@ -15,6 +15,9 @@ import (
 	"scriberr/pkg/logger"
 )
 
+// whisperXVersion is the upstream tag to install: updateWhisperXDependencies patches its pyproject.toml
+const whisperXVersion = "v3.8.6"
+
 // WhisperXAdapter implements the TranscriptionAdapter interface for WhisperX
 type WhisperXAdapter struct {
 	*BaseAdapter
@@ -331,7 +334,7 @@ func (w *WhisperXAdapter) PrepareEnvironment(ctx context.Context) error {
 
 // cloneWhisperX clones the WhisperX repository
 func (w *WhisperXAdapter) cloneWhisperX() error {
-	cmd := exec.Command("git", "clone", "https://github.com/m-bain/WhisperX.git")
+	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", whisperXVersion, "https://github.com/m-bain/WhisperX.git")
 	cmd.Dir = w.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -352,9 +355,22 @@ func (w *WhisperXAdapter) updateWhisperXDependencies(whisperxPath string) error 
 	content := string(data)
 	content = strings.ReplaceAll(content, "ctranslate2<4.5.0", "ctranslate2==4.6.0")
 
-	// torchcodec>=0.6.0 (upstream default) resolves to 0.10.0+ which requires PyTorch 2.9.
-	// Pin to 0.7.x which is compatible with the PyTorch 2.8.x used here.
-	content = strings.ReplaceAll(content, "torchcodec>=0.6.0", "torchcodec~=0.7.0")
+	// Upstream pins PyTorch 2.8, which has known CVEs fixed in 2.10+.
+	// Move the whole stack together: torch, torchaudio, torchvision and torchcodec must match.
+	content = strings.ReplaceAll(content, "torch~=2.8.0", "torch==2.11.0")
+	content = strings.ReplaceAll(content, "torchaudio~=2.8.0", "torchaudio==2.11.0")
+	content = strings.ReplaceAll(content, "torchvision~=0.23.0", "torchvision==0.26.0")
+	content = strings.ReplaceAll(content, "torchcodec>=0.6.0,<0.8.0", "torchcodec~=0.11.0")
+
+	// This cap blocks transformers 5.x and its CVE fixes (upstream main has already dropped it)
+	content = strings.ReplaceAll(content, "huggingface-hub<1.0.0", "huggingface-hub>=0.28.1")
+
+	// PyPI torchvision 0.26 targets CUDA 13: it must come from the same index as torch
+	content = strings.ReplaceAll(content, "[tool.uv.sources]\n", `[tool.uv.sources]
+torchvision = [
+  { index = "pytorch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
+`)
 
 	if !strings.Contains(content, "yt-dlp") {
 		content = strings.ReplaceAll(content,
@@ -370,6 +386,16 @@ func (w *WhisperXAdapter) updateWhisperXDependencies(whisperxPath string) error 
 
 	if err := os.WriteFile(pyprojectPath, []byte(content), 0644); err != nil {
 		return fmt.Errorf("failed to write pyproject.toml: %w", err)
+	}
+
+	// Upstream's uv.lock freezes old transitive dependencies with known CVEs: resolve fresh instead
+	if err := os.Remove(filepath.Join(whisperxPath, "uv.lock")); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove uv.lock: %w", err)
+	}
+
+	// Upstream pins Python 3.10, which holds back patched releases of several dependencies
+	if err := os.WriteFile(filepath.Join(whisperxPath, ".python-version"), []byte("3.12\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write .python-version: %w", err)
 	}
 
 	return nil
