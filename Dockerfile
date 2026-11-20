@@ -4,7 +4,7 @@
 ########################
 # UI build stage
 ########################
-FROM node:20-alpine AS ui-builder
+FROM node:24-alpine AS ui-builder
 WORKDIR /web
 
 ARG COMMIT_DATE
@@ -23,7 +23,7 @@ RUN cd frontend \
 ########################
 # Go build stage
 ########################
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.27-bookworm AS go-builder
 WORKDIR /src
 
 # Pre-cache modules

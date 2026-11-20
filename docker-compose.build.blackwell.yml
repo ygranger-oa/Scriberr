@@ -6,6 +6,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.cuda.12.9
+      # Always refresh base images so rebuilds pick up security fixes
+      pull: true
     image: scriberr:local-blackwell
     container_name: scriberr-blackwell
     ports:
