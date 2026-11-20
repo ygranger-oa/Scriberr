@@ -131,45 +131,41 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
         URL.revokeObjectURL(url);
     };
 
-    // PDF export: prints the rendered summary in an isolated iframe (no dependency,
-    // nothing leaves the browser). The user picks "Save as PDF" in the print dialog.
-    const handleDownloadPdf = () => {
+    // PDF export: rendered locally in the browser (html2pdf.js), nothing is sent to a server.
+    // The library is loaded lazily so it does not weigh on the main bundle.
+    const handleDownloadPdf = async () => {
         const node = summaryRef.current;
         if (!node) return;
 
         const title = audioFile?.title || "summary";
-        const iframe = document.createElement('iframe');
-        iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
-        document.body.appendChild(iframe);
-        const doc = iframe.contentDocument;
-        const win = iframe.contentWindow;
-        if (!doc || !win) {
-            document.body.removeChild(iframe);
-            return;
+        const filename = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}-summary.pdf`;
+
+        // Render a light-themed clone off-screen so the PDF is readable regardless of the UI theme
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position:fixed;left:-10000px;top:0;width:720px;background:#fff;color:#171717;padding:24px;';
+        const clone = node.cloneNode(true) as HTMLElement;
+        clone.classList.remove('dark:prose-invert');
+        clone.querySelectorAll<HTMLElement>('*').forEach(el => { el.style.color = '#171717'; });
+        wrapper.appendChild(clone);
+        document.body.appendChild(wrapper);
+
+        try {
+            const { default: html2pdf } = await import('html2pdf.js');
+            await html2pdf()
+                .set({
+                    margin: 12,
+                    filename,
+                    image: { type: 'jpeg', quality: 0.98 },
+                    html2canvas: { scale: 2, backgroundColor: '#ffffff' },
+                    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                })
+                .from(wrapper)
+                .save();
+        } catch {
+            toast({ title: 'PDF export failed' });
+        } finally {
+            wrapper.remove();
         }
-
-        const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
-            .map(el => el.outerHTML)
-            .join('\n');
-        const safeTitle = title.replace(/[<>&"]/g, '');
-        doc.open();
-        doc.write(`<!doctype html><html><head><meta charset="utf-8"><title>${safeTitle} - summary</title>${styles}
-<style>
-  html, body { background: #fff !important; color: #171717 !important; }
-  body { padding: 24px; }
-  .prose, .prose * { color: #171717 !important; }
-  @page { margin: 16mm; }
-</style></head><body></body></html>`);
-        doc.close();
-        doc.body.innerHTML = `<div class="prose max-w-none">${node.innerHTML}</div>`;
-
-        const cleanup = () => setTimeout(() => iframe.remove(), 500);
-        win.onafterprint = cleanup;
-        // Give stylesheets a moment to load before printing
-        setTimeout(() => {
-            win.focus();
-            win.print();
-        }, 400);
     };
 
     // Handle close - prevent closing during streaming
